@@ -32,3 +32,5 @@ git add diagnostics\env-check-*.txt
 git commit -m "chore: add laptop environment report"
 git push -u origin fix/env-report
 ```
+
+If the push fails with `HTTP 403` and the response has only your company proxy's `Via:` header, the proxy is blocking uploads to GitHub. Do not work around it: ask IT, and share the report text another way.

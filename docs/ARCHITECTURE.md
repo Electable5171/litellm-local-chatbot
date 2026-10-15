@@ -245,6 +245,7 @@ Request contents are added in priority order: system prompt → RAG context (cap
 | Docker | Docker Desktop 28.3 runs, user is in `docker-users`, WSL2 works | Native stays the default. Docker is a possible later packaging option, subject to the company licence. |
 | Corporate proxy | A cloud web proxy is set in Windows (not in environment variables). PyPI, npm, GitHub, Hugging Face and nodejs.org are reachable. | The LiteLLM client must ignore the system proxy (`httpx` reads the Windows proxy setting via `urllib`, so it needs `trust_env=False` for LiteLLM). Package and model downloads still use the proxy. |
 | Git / Node on the laptop | Git and Node are installed under `C:\Program Files`, but neither works from PATH in the report. Node is not needed. | Add `C:\Program Files\Git\cmd` to the user PATH. |
+| Git from the laptop | Pulling from GitHub works (authenticated, HTTP 200). Pushing fails with HTTP 403 whose response carries only the company proxy's `Via:` header and none of GitHub's own headers (`Server: GitHub-Babel`, `X-GitHub-Request-Id`), so the proxy, not GitHub, is refusing the upload. | The laptop is **pull-only**: all development and pushes happen from the cloud session, and the laptop runs `git pull` / `git checkout <tag>`. Do not try to bypass the proxy. Release tags are created on GitHub (release page or API), not pushed from the laptop. If IT allows pushes later, nothing in the design changes. |
 
 **Still open** (second run of `scripts/check-env.ps1` answers these):
 1. **Does streaming really stream reasoning?** The only streamed test answer (`17*23`) arrived as one content chunk with no reasoning chunks, even though usage shows 42 completion tokens. The whole test took about 0.1 s, so it may have been cached, or LiteLLM may buffer. A longer prompt (test 6) shows whether reasoning and content arrive token by token. If reasoning is not streamed, the UI shows "Thinking…" and fills the block at the end.
@@ -259,7 +260,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-env.ps1
 
 ## 10. Delivery plan and GitHub Flow
 
-**Branching:** `main` is always tested and runnable on the office laptop. Each change goes on a short-lived `feature/<name>` or `fix/<name>` branch, is merged through a PR once it works, and the branch is then deleted. A tag such as `vX.Y.Z` is added only to a commit that is **actually running on the laptop**.
+**Branching:** `main` is always tested and runnable on the office laptop. Each change goes on a short-lived `feature/<name>` or `fix/<name>` branch, is merged through a PR once it works, and the branch is then deleted. A tag such as `vX.Y.Z` is added only to a commit that is **actually running on the laptop**. Because the laptop cannot push, you confirm the commit is running, and the tag is then created on GitHub for that exact commit.
 
 **CI** (GitHub Actions, on every PR): `ruff`, `pytest` (LiteLLM mocked), `eslint`, `tsc`, `vitest`, and `npm run build`. CI also runs the backend tests on `windows-latest`, which catches Windows path and SQLite-extension issues before they reach the laptop. The built frontend is uploaded as a workflow artifact on each PR and attached to each GitHub release. CI cannot reach the internal LiteLLM, so a short manual smoke checklist on the laptop (`docs/RUNBOOK.md`) is the gate before merging to `main` and before tagging.
 
