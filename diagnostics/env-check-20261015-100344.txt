@@ -1,0 +1,133 @@
+litellm-local-chatbot environment report
+generated: 2026-10-15 10:03:15 +05:30
+script params: BaseUrl=http://172.17.58.139:4000/v1 Model=qwen3.8 DockerRunTest=False
+
+=== System ===
+  [OK]   Microsoft Windows 11 Pro build 26200 (64-bit)
+  [OK]   PowerShell 5.1.26100.9444
+         Running elevated: False
+         Execution policy (per scope):
+           MachinePolicy  Unrestricted
+           UserPolicy     Undefined
+           Process        Bypass
+           CurrentUser    Undefined
+           LocalMachine   Bypass
+         Free space on user profile drive: 50.1 GB
+         Culture: en-US
+
+=== Developer tools ===
+  [OK]   python Python 3.14.3  (C:\Users\<user>\AppData\Local\Programs\Python\Python314\python.exe)
+  [WARN] py launcher not found on PATH or in the usual install folders (not installed)
+  [OK]   uv uv 0.10.9 (f675560f3 2026-03-06)  (C:\Users\<user>\AppData\Local\Programs\Python\Python314\Scripts\uv.exe)
+  [WARN] node is NOT on PATH, but a copy exists at: C:\Program Files\nodejs\node.exe
+  [WARN] npm is NOT on PATH, but a copy exists at: C:\Program Files\nodejs\npm.cmd
+  [WARN] git is NOT on PATH, but a copy exists at: C:\Program Files\Git\cmd\git.exe
+         PATH entries (user + machine, as this process sees them):
+           C:\WINDOWS\system32
+           C:\WINDOWS
+           C:\WINDOWS\System32\Wbem
+           C:\WINDOWS\System32\WindowsPowerShell\v1.0\
+           C:\WINDOWS\System32\OpenSSH\
+           C:\Program Files\PuTTY\
+           C:\Program Files\Amazon\AWSCLIV2\
+           C:\terraform_1.14.0_windows_amd64
+           C:\Program Files\Docker\Docker\resources\bin
+           C:\Program Files\Microsoft VS Code\bin
+           C:\Program Files\nodejs\
+           C:\Users\<user>\AppData\Local\Seclore\FileSecure\Desktop Client
+           C:\Users\<user>\AppData\Local\Seclore\FileSecure\Desktop Client\Upgrade Manager
+           C:\Users\<user>\AppData\Local\Seclore\FileSecure\Desktop Client
+           C:\Users\<user>\AppData\Local\Seclore\FileSecure\Desktop Client\x64
+           C:\Users\<user>\AppData\Local\Programs\Python\Python314\Scripts\
+           C:\Users\<user>\AppData\Local\Programs\Python\Python314\
+           C:\Users\<user>\AppData\Local\Microsoft\WindowsApps
+           C:\Users\<user>\AppData\Local\Programs\Microsoft VS Code\bin
+         Pythons visible to the py launcher:
+            -V:3.14 *        C:\Users\<user>\AppData\Local\Programs\Python\Python314\python.exe
+         python sqlite check: 3.14.3 sqlite 3.50.4 extensions True
+
+=== Docker ===
+  [OK]   docker CLI: C:\Program Files\Docker\Docker\resources\bin\docker.exe
+         Client version: 28.3.0
+  [OK]   Docker engine is RUNNING (server 28.3.0)
+         Context: desktop-linux
+         Engine OS type: linux
+  [OK]   User is in the 'docker-users' group
+         Docker Desktop process is running
+         WSL status:
+           Default Distribution: docker-desktop
+           
+           Default Version: 2
+           
+
+=== Network: package registries (needed to install dependencies) ===
+         System proxy for https: http://ipv4.203.194.96.55.hybrid-web.global.blackspider.com/
+  [OK]   https://pypi.org/simple/fastapi/ -> 200
+  [WARN] https://files.pythonhosted.org/ -> HTTP 404 (reachable, but refuses HEAD or needs a path)
+  [OK]   https://registry.npmjs.org/react -> 200
+  [OK]   https://github.com -> 200
+  [FAIL] https://objects.githubusercontent.com -> The operation has timed out.
+  [OK]   https://huggingface.co -> 200
+  [WARN] https://astral.sh/uv/install.ps1 -> HTTP 403 (reachable, but refuses HEAD or needs a path)
+  [OK]   https://nodejs.org/dist/index.json -> 200
+
+=== LiteLLM at http://172.17.58.139:4000/v1 ===
+         API key present, 25 characters (value not shown)
+  [OK]   TCP connect to 172.17.58.139:4000 works
+  [OK]   LiteLLM readiness: status=healthy version=
+  [OK]   GET /models returned 6 model(s) for this key:
+           - qwen3.8
+           - nemotron-nano
+           - gpt-oss
+           - foundation-sec
+           - nuextract
+           - jina-ocr
+         No embedding-looking model ids in the list (local embeddings plan stays)
+         /model_group/info : not available to this key: The remote server returned an error: (403) Forbidden. | HTTP body: 
+         /model/info : not available to this key: The remote server returned an error: (403) Forbidden. | HTTP body: 
+         
+         --- Test 1: normal (non-streaming), default thinking ---
+  [OK]   Chat (thinking default): 0.1s, finish=stop, prompt_tokens=25, completion_tokens=42
+         message fields: content, role, reasoning_content, provider_specific_fields
+         reasoning field with text: reasoning_content | <think> tags inside content: False
+         content:   391
+         raw message JSON: {"content":"\n\n391","role":"assistant","reasoning_content":"17 Ã 23 = 17 Ã 20 + 17 Ã 3 = 340 + 51 = 391\n","provider_specific_fields":{"reasoning":"17 Ã 23 = 17 Ã 20 + 17 Ã 3 = 340 + 51 = 391\n","refusal":null}}
+         
+         --- Test 2: thinking OFF via chat_template_kwargs (top-level body field) ---
+  [OK]   Chat (enable_thinking=false): 0.1s, finish=stop, prompt_tokens=27, completion_tokens=4
+         message fields: content, role, provider_specific_fields
+         reasoning field with text: none | <think> tags inside content: False
+         content: 391
+         raw message JSON: {"content":"391","role":"assistant","provider_specific_fields":{"reasoning":null,"refusal":null}}
+         If completion_tokens is much lower than test 1 and no reasoning is present, the toggle works through LiteLLM.
+         
+         --- Test 3: thinking OFF via extra_body wrapper (some LiteLLM setups need this form) ---
+  [OK]   Chat (extra_body.chat_template_kwargs): 0.1s, finish=stop, prompt_tokens=27, completion_tokens=4
+         message fields: content, role, provider_specific_fields
+         reasoning field with text: none | <think> tags inside content: False
+         content: 391
+         raw message JSON: {"content":"391","role":"assistant","provider_specific_fields":{"reasoning":null,"refusal":null}}
+         
+         --- Test 4: STREAMING, default thinking (the format the app will actually receive) ---
+         Stream (thinking default) : headers after 0.1s, Content-Type: text/event-stream; charset=utf-8
+  [OK]   Stream (thinking default): 3 chunks in 0.1s, finish=stop
+         delta keys seen: content, role
+         chunks with reasoning text: 0 | chunks with content: 1 | <think> tags in content: False
+         time to first chunk: 0.1s | first reasoning: n/a | first content: 0.1s
+         usage in stream: prompt=25 completion=42
+         sample chunk: {"id":"chatcmpl-bd0494cbcee21278","object":"chat.completion.chunk","created":1792038819,"model":"qwen3.8","choices":[{"index":0,"delta":{"role":"assistant","content":"\n\n391"}}]}
+         sample chunk: {"id":"chatcmpl-bd0494cbcee21278","object":"chat.completion.chunk","created":1792038819,"model":"qwen3.8","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+         sample chunk: {"id":"chatcmpl-bd0494cbcee21278","created":1792038819,"model":"qwen3.8","object":"chat.completion.chunk","choices":[{"index":0,"delta":{}}],"usage":{"completion_tokens":42,"prompt_tokens":25,"total_tokens":67,"completion_tokens_details":{"reasoning_tokens":0}}}
+         
+         --- Test 5: STREAMING, thinking OFF ---
+         Stream (enable_thinking=false) : headers after 0.1s, Content-Type: text/event-stream; charset=utf-8
+  [OK]   Stream (enable_thinking=false): 2 chunks in 0.1s, finish=stop
+         delta keys seen: content, role
+         chunks with reasoning text: 0 | chunks with content: 1 | <think> tags in content: False
+         time to first chunk: 0.1s | first reasoning: n/a | first content: 0.1s
+         usage in stream: not reported
+         sample chunk: {"id":"chatcmpl-9c215f338d7f5c86","object":"chat.completion.chunk","created":1792038819,"model":"qwen3.8","choices":[{"index":0,"delta":{"role":"assistant","content":"391"}}]}
+         sample chunk: {"id":"chatcmpl-9c215f338d7f5c86","object":"chat.completion.chunk","created":1792038819,"model":"qwen3.8","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+=== Local port ===
+  [OK]   Port 8000 is free
