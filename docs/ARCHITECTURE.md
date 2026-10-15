@@ -1,6 +1,6 @@
 # Architecture — litellm-local-chatbot
 
-> Status: **Draft for review** · Scope: single user, office laptop (Windows, no admin rights) · Upstream: on-prem LiteLLM at `http://172.17.58.139:4000/v1` serving `Qwen/Qwen3.8-27B-FP8`
+> Status: **Draft for review** · Scope: single user, office laptop (Windows, no admin rights) · Upstream: on-prem LiteLLM at `http://172.17.58.139:4000/v1` serving model id `qwen3.8` (Qwen3.8-27B-FP8)
 
 ## 1. Goals and non-goals
 
@@ -225,7 +225,7 @@ Request contents are added in priority order: system prompt → RAG context (cap
 - LiteLLM's own spend logs remain the source of truth for usage.
 
 **Configuration** (`.env`, validated at startup by pydantic-settings; the app fails fast with a clear message):
-`LITELLM_BASE_URL` (default `http://172.17.58.139:4000/v1`; a trailing `/v1` is normalised), `LITELLM_API_KEY`, `CHAT_MODEL`, `EMBEDDING_PROVIDER` (`local` or `litellm`), `EMBEDDING_MODEL`, `MAX_CONTEXT_TOKENS`, `MAX_OUTPUT_TOKENS`, `DATA_DIR`, `SSL_CERT_FILE` (optional), `REQUEST_TIMEOUT_S`, `MAX_UPLOAD_MB`.
+`LITELLM_BASE_URL` (default `http://172.17.58.139:4000/v1`; a trailing `/v1` is normalised), `LITELLM_API_KEY`, `CHAT_MODEL` (default `qwen3.8`), `EMBEDDING_PROVIDER` (`local` or `litellm`), `EMBEDDING_MODEL`, `MAX_CONTEXT_TOKENS`, `MAX_OUTPUT_TOKENS`, `DATA_DIR`, `SSL_CERT_FILE` (optional), `REQUEST_TIMEOUT_S`, `MAX_UPLOAD_MB`.
 
 ## 9. Decisions log and remaining unknowns
 
