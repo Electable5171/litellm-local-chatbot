@@ -81,17 +81,15 @@ function Get-ErrorDetail($ErrorRecord) {
     return $msg
 }
 
-# Runs an external command. Returns its first output line, or $null if it isn't installed or fails.
-function Get-ToolVersion([string]$Exe, [string[]]$VersionArgs = @("--version")) {
-    $cmd = Get-Command $Exe -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $cmd) { return $null }
-    # The Microsoft Store "python.exe" stub lives in WindowsApps and opens the Store instead of running Python
-    if ($cmd.Source -like "*\WindowsApps\*") { return "STORE-STUB ($($cmd.Source))" }
+# Runs an external command and keeps the detail when it fails (exit code, output, or the exception text)
+function Try-Run([string]$Path, [string[]]$RunArgs = @("--version")) {
     try {
-        $out = & $cmd.Source @VersionArgs 2>&1 | Select-Object -First 1
-        if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { return $null }
-        return "$out  ($($cmd.Source))"
-    } catch { return $null }
+        $out = (& $Path @RunArgs 2>&1 | Out-String).Trim()
+        $code = $LASTEXITCODE
+        return @{ Ok = ($null -eq $code -or $code -eq 0); Exit = $code; Out = $out }
+    } catch {
+        return @{ Ok = $false; Exit = $null; Out = $_.Exception.Message }
+    }
 }
 
 # Looks in the usual install folders, to tell "installed but not on PATH" from "not installed"
@@ -113,14 +111,26 @@ function Find-InCommonPlaces([string]$Exe) {
 }
 
 function Report-Tool([string]$Name, [string]$Exe, [string[]]$VersionArgs = @("--version")) {
-    $v = Get-ToolVersion $Exe $VersionArgs
-    if (-not $v) {
-        $found = Find-InCommonPlaces $Exe
-        if ($found) { Warn "$Name is NOT on PATH, but a copy exists at: $found" }
-        else        { Warn "$Name not found on PATH or in the usual install folders (not installed)" }
+    $cmd = Get-Command $Exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) {
+        # The Microsoft Store "python.exe" stub lives in WindowsApps and opens the Store instead of running Python
+        if ($cmd.Source -like "*\WindowsApps\*" -and $Exe -in @("python", "py")) {
+            Warn "$Name is only the Microsoft Store alias, not a real install: $($cmd.Source)"
+            return
+        }
+        $r = Try-Run $cmd.Source $VersionArgs
+        if ($r.Ok) { Ok "$Name $(Trunc $r.Out 120)  ($($cmd.Source))" }
+        else       { Bad "$Name found on PATH at $($cmd.Source) but running it FAILED (exit code $($r.Exit)). Output: $(Trunc $r.Out 400)" }
+        return
     }
-    elseif ($v -like "STORE-STUB*") { Warn "$Name is only the Microsoft Store alias, not a real install: $v" }
-    else                            { Ok "$Name $v" }
+    $found = Find-InCommonPlaces $Exe
+    if ($found) {
+        $r = Try-Run $found $VersionArgs
+        if ($r.Ok) { Warn "$Name is NOT on PATH, but works when run directly: $(Trunc $r.Out 120)  ($found)" }
+        else       { Bad "$Name is NOT on PATH and running $found FAILED (exit code $($r.Exit)). Output: $(Trunc $r.Out 400)" }
+    } else {
+        Warn "$Name not found on PATH or in the usual install folders (not installed)"
+    }
 }
 
 function Invoke-LLM([string]$Path, $Body, [int]$Timeout = 180) {
@@ -305,6 +315,9 @@ try {
             "https://objects.githubusercontent.com",
             "https://huggingface.co",
             "https://astral.sh/uv/install.ps1",
+            "https://www.python.org/ftp/python/",
+            "https://github.com/astral-sh/python-build-standalone/releases",
+            "https://release-assets.githubusercontent.com",
             "https://nodejs.org/dist/index.json")) {
         try {
             $r = Invoke-WebRequest -Uri $u -UseBasicParsing -Method Head -TimeoutSec 10
@@ -403,6 +416,23 @@ try {
     Info "--- Test 5: STREAMING, thinking OFF ---"
     Test-Stream "Stream (enable_thinking=false)" @{ model = $Model; messages = @($q); max_tokens = 512; stream = $true;
                                                      chat_template_kwargs = @{ enable_thinking = $false } }
+
+    Info ""
+    Info "--- Test 6: STREAMING a longer answer with thinking ON (real token-by-token behaviour and speed) ---"
+    $long = @{ role = "user"; content = "Explain in about 250 words how a B-tree index speeds up database lookups. Think it through first." }
+    Test-Stream "Stream long (thinking default)" @{ model = $Model; messages = @($long); max_tokens = 1500; stream = $true;
+                                                    stream_options = @{ include_usage = $true } }
+
+    Info ""
+    Info "--- Test 7: context length probe (asks for an impossible max_tokens; the server's error usually states the limit) ---"
+    try {
+        $null = Invoke-LLM "/chat/completions" @{ model = $Model; messages = @($q); max_tokens = 100000000 } 60
+        Warn "Server accepted max_tokens=100000000; it does not enforce a context limit here (unexpected)"
+    } catch {
+        $detail = Get-ErrorDetail $_
+        Info "Server answer: $(Trunc $detail 700)"
+        if ($detail -match "(\d{4,7})\s*tokens") { Ok "Context length hint found in the error: $($Matches[1]) tokens (check the sentence above)" }
+    }
 
     # -----------------------------------------------------------------------
     Section "Local port"

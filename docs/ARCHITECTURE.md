@@ -238,11 +238,19 @@ Request contents are added in priority order: system prompt → RAG context (cap
 | Embeddings | None in LiteLLM | Local `fastembed` (ADR 10) |
 | Laptop | Windows, no admin rights | `uv` installed per user; Node not needed on the laptop (CI builds the frontend); PowerShell run scripts (ADR 8) |
 | Data sensitivity | OK, because the model and LiteLLM are both on-prem | No extra redaction layer |
+| Model id | `qwen3.8` | `CHAT_MODEL` default. The key also sees `nemotron-nano`, `gpt-oss`, `foundation-sec`, `nuextract` and `jina-ocr`; none is an embedding model. The model picker is an allow-list in config, starting with `qwen3.8` only. |
+| Thinking toggle | `chat_template_kwargs: {"enable_thinking": false}` as a top-level body field works through LiteLLM (completion tokens 42 → 4). The `extra_body` wrapper also works. | Use the top-level field. No `/no_think` fallback is needed. |
+| Thinking shape (non-streaming) | Separate `reasoning_content` field (LiteLLM also copies it into `provider_specific_fields.reasoning`). `content` starts with `\n\n`. | `ThinkingParser` reads `reasoning_content`, then `reasoning`, then `<think>` tags. Trim leading whitespace from `content`. |
+| Python on the laptop | Python 3.14.3 (per-user install, SQLite extensions enabled), `uv` 0.10.9 | All planned dependencies publish Windows cp314 wheels (checked on PyPI), so nothing needs a compiler. Pin exact versions in `uv.lock`. |
+| Docker | Docker Desktop 28.3 runs, user is in `docker-users`, WSL2 works | Native stays the default. Docker is a possible later packaging option, subject to the company licence. |
+| Corporate proxy | A cloud web proxy is set in Windows (not in environment variables). PyPI, npm, GitHub, Hugging Face and nodejs.org are reachable. | The LiteLLM client must ignore the system proxy (`httpx` reads the Windows proxy setting via `urllib`, so it needs `trust_env=False` for LiteLLM). Package and model downloads still use the proxy. |
+| Git / Node on the laptop | Git and Node are installed under `C:\Program Files`, but neither works from PATH in the report. Node is not needed. | Add `C:\Program Files\Git\cmd` to the user PATH. |
 
-**Still to confirm** (by running `scripts/check-env.ps1` on the laptop):
-- Python, uv, Node, Git and Docker availability, and whether the network can reach PyPI, npm, GitHub and Hugging Face.
-- Thinking output shape (`reasoning_content` vs `<think>`), and whether LiteLLM forwards `chat_template_kwargs`.
-- The model's context length (`max_input_tokens` from `/model/info`, if this key is allowed to read it).
+**Still open** (second run of `scripts/check-env.ps1` answers these):
+1. **Does streaming really stream reasoning?** The only streamed test answer (`17*23`) arrived as one content chunk with no reasoning chunks, even though usage shows 42 completion tokens. The whole test took about 0.1 s, so it may have been cached, or LiteLLM may buffer. A longer prompt (test 6) shows whether reasoning and content arrive token by token. If reasoning is not streamed, the UI shows "Thinking…" and fills the block at the end.
+2. **Context length.** `/model/info` is forbidden for this key. Test 7 asks for an impossible `max_tokens`, and the server's error normally states the limit. Otherwise `MAX_CONTEXT_TOKENS` must be set by hand from whoever runs vLLM.
+3. **Why `node --version` and `git` fail** even though the files exist (the script now prints the exit code and error text).
+4. **Whether Python builds and the `uv` standalone Pythons can be downloaded**: `objects.githubusercontent.com` timed out in the first run. The script now also checks `python.org` and the newer GitHub release host. This matters only if we want a different Python than 3.14.
 
 ```powershell
 $env:LITELLM_API_KEY = "sk-..."
