@@ -94,9 +94,31 @@ function Get-ToolVersion([string]$Exe, [string[]]$VersionArgs = @("--version")) 
     } catch { return $null }
 }
 
+# Looks in the usual install folders, to tell "installed but not on PATH" from "not installed"
+function Find-InCommonPlaces([string]$Exe) {
+    $pf = $env:ProgramFiles; $pf86 = ${env:ProgramFiles(x86)}; $lad = $env:LOCALAPPDATA; $up = $env:USERPROFILE
+    $patterns = @{
+        "git"     = @("$pf\Git\cmd\git.exe", "$pf86\Git\cmd\git.exe", "$lad\Programs\Git\cmd\git.exe", "$up\PortableGit\cmd\git.exe")
+        "node"    = @("$pf\nodejs\node.exe", "$pf86\nodejs\node.exe", "$lad\Programs\nodejs\node.exe", "$env:APPDATA\nvm\*\node.exe", "$up\nodejs*\node.exe")
+        "npm.cmd" = @("$pf\nodejs\npm.cmd", "$pf86\nodejs\npm.cmd", "$lad\Programs\nodejs\npm.cmd", "$env:APPDATA\npm\npm.cmd")
+        "python"  = @("$lad\Programs\Python\Python3*\python.exe", "$pf\Python3*\python.exe")
+        "uv"      = @("$up\.local\bin\uv.exe", "$up\.cargo\bin\uv.exe", "$lad\Programs\uv\uv.exe")
+    }
+    if (-not $patterns.ContainsKey($Exe)) { return $null }
+    foreach ($p in $patterns[$Exe]) {
+        $hit = Get-Item -Path $p -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($hit) { return $hit.FullName }
+    }
+    return $null
+}
+
 function Report-Tool([string]$Name, [string]$Exe, [string[]]$VersionArgs = @("--version")) {
     $v = Get-ToolVersion $Exe $VersionArgs
-    if (-not $v)                    { Warn "$Name not found" }
+    if (-not $v) {
+        $found = Find-InCommonPlaces $Exe
+        if ($found) { Warn "$Name is NOT on PATH, but a copy exists at: $found" }
+        else        { Warn "$Name not found on PATH or in the usual install folders (not installed)" }
+    }
     elseif ($v -like "STORE-STUB*") { Warn "$Name is only the Microsoft Store alias, not a real install: $v" }
     else                            { Ok "$Name $v" }
 }
@@ -217,6 +239,8 @@ try {
     Report-Tool "node" "node"
     Report-Tool "npm" "npm.cmd"
     Report-Tool "git" "git"
+    Info "PATH entries (user + machine, as this process sees them):"
+    ($env:PATH -split ";") | Where-Object { $_ } | ForEach-Object { Info "  $_" }
     if (Get-Command py -ErrorAction SilentlyContinue) {
         Info "Pythons visible to the py launcher:"
         & py -0p 2>&1 | ForEach-Object { Info "  $_" }
