@@ -1,6 +1,6 @@
 # Architecture — litellm-local-chatbot
 
-> Status: **Draft for review** · Scope: single user, office laptop · Upstream: existing LiteLLM proxy serving `Qwen/Qwen3.8-27B-FP8`
+> Status: **Draft for review** · Scope: single user, office laptop (Windows, no admin rights) · Upstream: on-prem LiteLLM at `http://172.17.58.139:4000/v1` serving `Qwen/Qwen3.8-27B-FP8`
 
 ## 1. Goals and non-goals
 
@@ -29,26 +29,27 @@ flowchart LR
             CS["Chat service<br/>(history, token budget,<br/>thinking parser)"]
             RAG["RAG service<br/>(extract → chunk → embed → retrieve)"]
             LC["LiteLLM client<br/>(httpx / openai SDK)"]
+            EMB["Local embedder<br/>fastembed (ONNX, CPU)<br/>bge-small-en-v1.5"]
         end
         DB[("SQLite (WAL)<br/>conversations, messages,<br/>documents, chunks<br/>+ sqlite-vec index")]
         FS[["data/uploads/<br/>original files"]]
     end
-    subgraph Upstream["Existing infra (not managed here)"]
-        LL["LiteLLM proxy"]
+    subgraph Upstream["On-prem infra (not managed here)"]
+        LL["LiteLLM proxy<br/>172.17.58.139:4000"]
         M["Qwen3.8-27B-FP8<br/>(vLLM or similar)"]
-        E["Embedding model<br/>(TBD — see §9)"]
     end
 
     B -- "fetch + SSE stream" --> R
     R --> CS --> LC
-    R --> RAG --> LC
+    R --> RAG --> EMB
     CS --> DB
     RAG --> DB
     RAG --> FS
-    LC -- "HTTPS + virtual key<br/>/v1/chat/completions<br/>/v1/embeddings" --> LL
+    LC -- "HTTP (plain) + virtual key<br/>/v1/chat/completions" --> LL
     LL --> M
-    LL --> E
 ```
+
+**Embeddings run locally.** LiteLLM has no embedding model today, so documents are embedded on the laptop CPU with `fastembed`. It uses ONNX Runtime, with no torch and no GPU, and the model is about 130 MB. Embedding sits behind an `Embedder` interface. If an embedding model is later added to LiteLLM, switching to it is a config change (`EMBEDDING_PROVIDER=litellm`) plus a one-time re-index.
 
 **Why there is a backend at all:** the browser could call LiteLLM directly, but then the API key sits in the browser, CORS has to be opened on LiteLLM, and there is nowhere to persist history or run RAG. The backend is a thin, trusted layer that owns the key, the database, and the prompt assembly.
 
@@ -65,8 +66,9 @@ flowchart LR
 | 5 | Vector store | `sqlite-vec` in the same SQLite file, behind a `VectorStore` interface | Chroma, Qdrant, LanceDB, FAISS | One file, nothing extra to run. A personal corpus (≤ ~100k chunks) is well within brute-force or `sqlite-vec` range. Because of the interface, we can swap stores later without touching the rest of the code. |
 | 6 | Browser ↔ backend streaming | SSE over `fetch()` with a `ReadableStream` | WebSockets | Responses only flow one way. SSE is plain HTTP, simpler to debug, and works through proxies. `fetch` is used instead of `EventSource` because the request needs a POST body. |
 | 7 | LLM client | `openai` Python SDK pointed at LiteLLM `base_url` | Raw httpx, LangChain | LiteLLM is OpenAI-compatible. The SDK handles streaming, retries, and timeouts, and it keeps dependencies lean. No LangChain: it adds too much abstraction for what we need. |
-| 8 | Packaging | Native (`uv` + a built frontend). Docker Compose is optional. | Docker-only | Corporate laptops often restrict Docker Desktop through licensing or admin rights. Native install has fewer moving parts. |
-| 9 | Python tooling | `uv`, `ruff`, `pytest`; frontend: `pnpm`/`npm`, `eslint`, `vitest` | pip/poetry | Fast, reproducible lockfiles (`uv.lock`, `package-lock.json`). |
+| 8 | Packaging on the laptop | Native Windows, no admin rights. `uv` is installed per user and it installs and pins its own Python. Node is **not required** on the laptop: CI builds the frontend and attaches it to each PR and release. | Docker Desktop | Docker Desktop on Windows needs WSL2 or Hyper-V, membership of `docker-users` (granted by an admin), and a paid licence in larger companies. None of that can be fixed without admin rights. Docker Compose stays optional if `check-env.ps1` shows it works. |
+| 9 | Python tooling | `uv`, `ruff`, `pytest`; frontend: `npm`, `eslint`, `vitest` | pip/poetry | Fast, reproducible lockfiles (`uv.lock`, `package-lock.json`). `uv` needs no admin rights. |
+| 10 | Embeddings | Local `fastembed` (`BAAI/bge-small-en-v1.5`, 384 dimensions), behind an `Embedder` interface | `sentence-transformers` (torch, 2 GB+); a LiteLLM embedding model (none exists today) | Small, CPU-only, has Windows wheels. The model download happens once into `data/models/`. If the corporate network blocks huggingface.co, the model can be copied in manually. |
 
 ## 4. Repository layout
 
@@ -88,7 +90,7 @@ litellm-local-chatbot/
 ├── frontend/
 │   ├── src/ (components/, hooks/useChatStream.ts, api/, pages/)
 │   └── package.json / package-lock.json
-├── scripts/                   # run.sh / run.ps1, backup_db, smoke_test
+├── scripts/                   # check-env.ps1, run.ps1 + run.cmd (Windows), backup_db
 ├── docs/ARCHITECTURE.md, docs/adr/, docs/RUNBOOK.md
 ├── .github/workflows/ci.yml   # lint + unit tests (no LiteLLM access in CI)
 ├── .env.example               # never commit .env
@@ -203,7 +205,8 @@ Request contents are added in priority order: system prompt → RAG context (cap
 - Bind to `127.0.0.1` only, never `0.0.0.0`. CORS is off in production, since the frontend and backend share one origin.
 - Only the backend holds the LiteLLM key, in `.env`, which is in `.gitignore`. Use a dedicated **LiteLLM virtual key** with a budget and rate limit, not the master key, so a runaway loop cannot burn shared capacity and the key can be revoked on its own.
 - Rendered markdown is sanitized (`rehype-sanitize`), and raw HTML from the model is never injected. Model output is untrusted input, and this matters even more once documents enter the prompt (prompt injection through RAG).
-- Corporate networks may need a custom CA bundle (`SSL_CERT_FILE`) and `NO_PROXY` set for the LiteLLM host. Both are config options, so nobody is tempted to turn TLS verification off.
+- **LiteLLM is plain HTTP.** The key and every prompt (including document text) cross the office LAN unencrypted, so anyone able to capture traffic on that network segment can read them. For an on-prem, internal-only service this is an accepted risk. The virtual key's budget and rate limit cap the damage if the key leaks, and it can be revoked without touching other users. If the infra team later puts TLS in front of LiteLLM, only `LITELLM_BASE_URL` changes (plus `SSL_CERT_FILE` if they use an internal CA).
+- **Proxy bypass.** If Windows has a corporate proxy configured, `httpx` could try to send requests for `172.17.58.139` through it and fail. The LiteLLM client is built with explicit proxy settings (no proxy for the LiteLLM host), so it does not depend on whatever `HTTP_PROXY`/`NO_PROXY` happen to be set to on the laptop.
 
 **Reliability and failure modes**
 
@@ -222,51 +225,49 @@ Request contents are added in priority order: system prompt → RAG context (cap
 - LiteLLM's own spend logs remain the source of truth for usage.
 
 **Configuration** (`.env`, validated at startup by pydantic-settings; the app fails fast with a clear message):
-`LITELLM_BASE_URL`, `LITELLM_API_KEY`, `CHAT_MODEL`, `EMBEDDING_MODEL`, `MAX_CONTEXT_TOKENS`, `MAX_OUTPUT_TOKENS`, `DATA_DIR`, `SSL_CERT_FILE`, `REQUEST_TIMEOUT_S`, `MAX_UPLOAD_MB`.
+`LITELLM_BASE_URL` (default `http://172.17.58.139:4000/v1`; a trailing `/v1` is normalised), `LITELLM_API_KEY`, `CHAT_MODEL`, `EMBEDDING_PROVIDER` (`local` or `litellm`), `EMBEDDING_MODEL`, `MAX_CONTEXT_TOKENS`, `MAX_OUTPUT_TOKENS`, `DATA_DIR`, `SSL_CERT_FILE` (optional), `REQUEST_TIMEOUT_S`, `MAX_UPLOAD_MB`.
 
-## 9. Open questions (blocking design details)
+## 9. Decisions log and remaining unknowns
 
-1. **LiteLLM endpoint:** what is the base URL? Is it reachable from the laptop directly, or only over VPN or a corporate proxy? Does it use an internal CA certificate?
-2. **Auth:** can you get a **virtual key** for this app, or is only the master key available?
-3. **Embeddings:** is an embedding model exposed through LiteLLM (`/v1/embeddings`)? If not, the fallback is a local CPU model through `fastembed` (ONNX, e.g. `bge-small-en-v1.5`, about 130 MB, no GPU and no torch). The tradeoff is a model download on the laptop plus slower ingest.
-4. **Model config:** what are the `max_model_len` and the inference server (vLLM? reasoning parser on?)? Does LiteLLM forward `chat_template_kwargs`? The smoke test below answers this.
-5. **Laptop:** which OS, do you have admin rights, are Python 3.12 and Node 20+ installable, and is Docker allowed?
-6. **Data sensitivity:** uploaded documents stay on the laptop, but their text is sent to the LiteLLM-hosted model. Is that acceptable for the documents you plan to use?
+**Resolved**
 
-**Smoke test to run from the laptop** (answers questions 1, 3, and 4):
+| Question | Answer | Design impact |
+|----------|--------|---------------|
+| LiteLLM endpoint | `http://172.17.58.139:4000/v1`, reachable directly, no TLS | Plain HTTP client; proxy bypass; see the security notes in §8 |
+| Auth | A dedicated virtual key is available | Request one with a budget and an RPM limit |
+| Embeddings | None in LiteLLM | Local `fastembed` (ADR 10) |
+| Laptop | Windows, no admin rights | `uv` installed per user; Node not needed on the laptop (CI builds the frontend); PowerShell run scripts (ADR 8) |
+| Data sensitivity | OK, because the model and LiteLLM are both on-prem | No extra redaction layer |
 
-```bash
-export LITELLM_BASE_URL=https://<your-litellm-host>   # no trailing /v1
-export LITELLM_API_KEY=sk-...
+**Still to confirm** (by running `scripts/check-env.ps1` on the laptop):
+- Python, uv, Node, Git and Docker availability, and whether the network can reach PyPI, npm, GitHub and Hugging Face.
+- Thinking output shape (`reasoning_content` vs `<think>`), and whether LiteLLM forwards `chat_template_kwargs`.
+- The model's context length (`max_input_tokens` from `/model/info`, if this key is allowed to read it).
 
-# 1. Reachability + model list
-curl -sS "$LITELLM_BASE_URL/v1/models" -H "Authorization: Bearer $LITELLM_API_KEY" | python -m json.tool
-
-# 2. Thinking shape: look for "reasoning_content" vs "<think>" in content
-curl -sS "$LITELLM_BASE_URL/v1/chat/completions" -H "Authorization: Bearer $LITELLM_API_KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"Qwen/Qwen3.8-27B-FP8","messages":[{"role":"user","content":"What is 17*23?"}],"max_tokens":512}' | python -m json.tool
-
-# 3. Thinking toggle passthrough: reasoning should be absent/empty
-curl -sS "$LITELLM_BASE_URL/v1/chat/completions" -H "Authorization: Bearer $LITELLM_API_KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"Qwen/Qwen3.8-27B-FP8","messages":[{"role":"user","content":"What is 17*23?"}],"max_tokens":256,"chat_template_kwargs":{"enable_thinking":false}}' | python -m json.tool
-
-# 4. Embeddings available? (replace with a model name from step 1, if any)
-curl -sS "$LITELLM_BASE_URL/v1/embeddings" -H "Authorization: Bearer $LITELLM_API_KEY" \
-  -H 'Content-Type: application/json' -d '{"model":"<embedding-model>","input":"hello"}' | head -c 300
+```powershell
+$env:LITELLM_API_KEY = "sk-..."
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-env.ps1
 ```
 
 ## 10. Delivery plan and GitHub Flow
 
 **Branching:** `main` is always tested and runnable on the office laptop. Each change goes on a short-lived `feature/<name>` or `fix/<name>` branch, is merged through a PR once it works, and the branch is then deleted. A tag such as `vX.Y.Z` is added only to a commit that is **actually running on the laptop**.
 
-**CI** (GitHub Actions, on every PR): `ruff`, `pytest` (LiteLLM mocked), `eslint`, `tsc`, `vitest`, and `npm run build`. CI cannot reach the internal LiteLLM, so a short manual smoke checklist on the laptop (`docs/RUNBOOK.md`) is the gate before tagging.
+**CI** (GitHub Actions, on every PR): `ruff`, `pytest` (LiteLLM mocked), `eslint`, `tsc`, `vitest`, and `npm run build`. CI also runs the backend tests on `windows-latest`, which catches Windows path and SQLite-extension issues before they reach the laptop. The built frontend is uploaded as a workflow artifact on each PR and attached to each GitHub release. CI cannot reach the internal LiteLLM, so a short manual smoke checklist on the laptop (`docs/RUNBOOK.md`) is the gate before merging to `main` and before tagging.
+
+**Running on the laptop:** `scripts\run.ps1` performs these steps:
+1. Checks `.env`.
+2. Backs up the DB.
+3. Runs `uv sync`.
+4. Runs `alembic upgrade head`.
+5. Starts uvicorn on `127.0.0.1:8000`.
+
+A `run.cmd` wrapper calls it with `-ExecutionPolicy Bypass`, so it works under a restrictive per-user policy without admin rights.
 
 **Rollback:**
-```bash
-git fetch --tags && git checkout v0.1.0
-scripts/run.sh   # restore the pre-upgrade DB backup if a migration ran
+```powershell
+git fetch --tags; git checkout v0.1.0
+.\scripts\run.cmd   # if a migration ran, restore the pre-upgrade DB backup from data\backups\
 ```
 
 Rollback across a schema change needs the automatic pre-migration DB backup, because a newer schema is not guaranteed to work with older code. Every Alembic migration also implements `downgrade()`.
@@ -279,4 +280,4 @@ Rollback across a schema change needs the automatic pre-migration DB backup, bec
 | v0.2.0 | `feature/rag-ingest`, `feature/rag-retrieval`, `feature/rag-ui` | Upload, per-chat documents, retrieval with citations, ingest status |
 | v0.3.0 | (polish) | Regenerate/edit message, auto-titles, search history, export chat to Markdown, system prompt presets, `/stats` |
 
-RAG is placed in **v0.2.0** rather than v0.1.0 on purpose. It depends on an unanswered question (embedding model availability), and it roughly doubles the surface area to test. Shipping chat first gives you a tagged, usable `main` sooner. The data model above already includes the document tables, so this ordering does not require rework later.
+RAG is placed in **v0.2.0** rather than v0.1.0 on purpose. It adds a local embedding model (download, Windows CPU performance, a possible Hugging Face block), and it roughly doubles the surface area to test. Shipping chat first gives you a tagged, usable `main` sooner. The data model above already includes the document tables, so this ordering does not require rework later.
