@@ -29,7 +29,8 @@ param(
     [string]$BaseUrl = "http://172.17.58.139:4000/v1",
     [string]$Model = "qwen3.8",
     [string]$OutFile = "",
-    [switch]$DockerRunTest
+    [switch]$DockerRunTest,
+    [switch]$IncludeExtraBodyTest
 )
 
 $ErrorActionPreference = "Continue"
@@ -75,7 +76,12 @@ function Get-ErrorDetail($ErrorRecord) {
         if ($resp) {
             $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
             $body = $reader.ReadToEnd()
-            return "$msg | HTTP body: $(Trunc $body 600)"
+            $hdrs = @()
+            foreach ($k in $resp.Headers.AllKeys) {
+                if ($k -match "^(retry-after|x-ratelimit|x-litellm|llm_provider)") { $hdrs += "$k=$($resp.Headers[$k])" }
+            }
+            $hdrText = if ($hdrs.Count -gt 0) { " | headers: " + ($hdrs -join "; ") } else { "" }
+            return "$msg | HTTP body: $(Trunc $body 600)$hdrText"
         }
     } catch { }
     return $msg
@@ -135,8 +141,27 @@ function Report-Tool([string]$Name, [string]$Exe, [string[]]$VersionArgs = @("--
 
 function Invoke-LLM([string]$Path, $Body, [int]$Timeout = 180) {
     $json = $Body | ConvertTo-Json -Depth 10 -Compress
-    return Invoke-RestMethod -Uri "$BaseUrl$Path" -Method Post -Headers $script:Headers `
-        -ContentType "application/json" -Body ([Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec $Timeout
+    $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+    # Be gentle: the model is shared, and LiteLLM puts a deployment on cooldown after upstream errors
+    Start-Sleep -Seconds 3
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        try {
+            $r = Invoke-WebRequest -Uri "$BaseUrl$Path" -Method Post -Headers $script:Headers `
+                -ContentType "application/json" -Body $bytes -TimeoutSec $Timeout -UseBasicParsing
+            # PowerShell 5.1 decodes a JSON reply without a charset as Latin-1; decode the raw bytes as UTF-8 instead
+            $text = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray())
+            return ($text | ConvertFrom-Json)
+        } catch {
+            $status = $null
+            try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+            if ($status -eq 429 -and $attempt -lt 4) {
+                Info "429 from LiteLLM (attempt $attempt of 4), waiting 7 s before retrying: $(Trunc (Get-ErrorDetail $_) 300)"
+                Start-Sleep -Seconds 7
+                continue
+            }
+            throw
+        }
+    }
 }
 
 # Summarises where a non-streaming answer put the model's reasoning
@@ -156,7 +181,8 @@ function Show-ChatResult([string]$Label, $Resp, [double]$Elapsed) {
 }
 
 # Streams a chat completion with .NET HttpClient and summarises the delta format (what the app will receive)
-function Test-Stream([string]$Label, $Body) {
+function Test-Stream([string]$Label, $Body, [int]$Attempt = 1) {
+    if ($Attempt -eq 1) { Start-Sleep -Seconds 3 }
     Add-Type -AssemblyName System.Net.Http
     $handler = New-Object System.Net.Http.HttpClientHandler
     $handler.UseProxy = $false
@@ -171,7 +197,19 @@ function Test-Stream([string]$Label, $Body) {
         $resp = $client.SendAsync($req, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
         if (-not $resp.IsSuccessStatusCode) {
             $err = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-            Bad "$Label : HTTP $([int]$resp.StatusCode) $(Trunc $err 600)"
+            $hdrs = @()
+            foreach ($h in $resp.Headers) {
+                if ($h.Key -match "^(retry-after|x-ratelimit|x-litellm|llm_provider)") { $hdrs += "$($h.Key)=$($h.Value -join ',')" }
+            }
+            $hdrText = if ($hdrs.Count -gt 0) { " | headers: " + ($hdrs -join "; ") } else { "" }
+            if ([int]$resp.StatusCode -eq 429 -and $Attempt -lt 4) {
+                Info "$Label : 429, waiting 7 s before retry $($Attempt + 1) of 4: $(Trunc $err 300)$hdrText"
+                $client.Dispose()
+                Start-Sleep -Seconds 7
+                Test-Stream $Label $Body ($Attempt + 1)
+                return
+            }
+            Bad "$Label : HTTP $([int]$resp.StatusCode) $(Trunc $err 600)$hdrText"
             return
         }
         Info ("{0} : headers after {1:N1}s, Content-Type: {2}" -f $Label, $sw.Elapsed.TotalSeconds, $resp.Content.Headers.ContentType)
@@ -398,14 +436,17 @@ try {
         Info "If completion_tokens is much lower than test 1 and no reasoning is present, the toggle works through LiteLLM."
     } catch { Bad "Chat with chat_template_kwargs failed (LiteLLM may reject the field): $(Get-ErrorDetail $_)" }
 
-    Info ""
-    Info "--- Test 3: thinking OFF via extra_body wrapper (some LiteLLM setups need this form) ---"
-    try {
-        $sw = [Diagnostics.Stopwatch]::StartNew()
-        $r3 = Invoke-LLM "/chat/completions" @{ model = $Model; messages = @($q); max_tokens = 512;
-                                                 extra_body = @{ chat_template_kwargs = @{ enable_thinking = $false } } }
-        Show-ChatResult "Chat (extra_body.chat_template_kwargs)" $r3 $sw.Elapsed.TotalSeconds
-    } catch { Bad "Chat with extra_body failed: $(Get-ErrorDetail $_)" }
+    if ($IncludeExtraBodyTest) {
+        Info ""
+        Info "--- Test 3: thinking OFF via extra_body wrapper (some LiteLLM setups need this form) ---"
+        try {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $r3 = Invoke-LLM "/chat/completions" @{ model = $Model; messages = @($q); max_tokens = 512;
+                                                     extra_body = @{ chat_template_kwargs = @{ enable_thinking = $false } } }
+            Show-ChatResult "Chat (extra_body.chat_template_kwargs)" $r3 $sw.Elapsed.TotalSeconds
+        } catch { Bad "Chat with extra_body failed: $(Get-ErrorDetail $_)" }
+
+    }
 
     Info ""
     Info "--- Test 4: STREAMING, default thinking (the format the app will actually receive) ---"
