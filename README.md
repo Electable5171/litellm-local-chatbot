@@ -55,6 +55,15 @@ This writes `%APPDATA%\pip\pip.ini`, which is outside the repository. Never put 
    .\scripts\run.cmd
    ```
 
+**If pip then fails with `[X509] PEM lib`**, the file is damaged. Python can see `-----BEGIN CERTIFICATE-----` but not a complete, valid certificate after it: a line is missing or cut off, a character changed, or the `-----END CERTIFICATE-----` line is missing. This usually happens when the certificate text is copied through email, chat or a web page. Get the file again as an attachment, or export it (Windows: open the certificate, Details, Copy to File, **Base-64 encoded X.509**). Check it before running pip:
+
+```powershell
+python -c "import ssl,sys; ssl.create_default_context().load_verify_locations(sys.argv[1]); print('OK')" "$env:USERPROFILE\certs\company-root-ca.pem"
+(Select-String -Path "$env:USERPROFILE\certs\company-root-ca.pem" -Pattern "BEGIN CERTIFICATE").Count
+(Select-String -Path "$env:USERPROFILE\certs\company-root-ca.pem" -Pattern "END CERTIFICATE").Count
+```
+The first command must print `OK`, and the two counts must be equal. `run.cmd` now runs this check itself before pip starts.
+
 Adding the CA to the Windows certificate store instead would make every program you run trust it, which is broader than needed. Do that only if IT asks you to.
 
 ## Develop and test

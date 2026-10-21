@@ -53,6 +53,7 @@ function Show-InstallHelp {
     Write-Host "    does not trust. Get that CA certificate from the Nexus administrators, check its fingerprint with them, then run:" -ForegroundColor Yellow
     Write-Host "      python -m pip config set global.cert ""C:\Users\<you>\certs\company-root-ca.pem""" -ForegroundColor Yellow
     Write-Host "    Never use --trusted-host or turn certificate checking off. See the README section 'If pip says the certificate is not trusted'." -ForegroundColor Yellow
+    Write-Host "  - '[X509] PEM lib': the CA file set in pip global.cert is damaged (see the README section on certificates)." -ForegroundColor Yellow
     Write-Host "  - Offline, with dependencies already installed: run  .\scripts\run.cmd -SkipSync" -ForegroundColor Yellow
 }
 
@@ -75,6 +76,27 @@ function Install-WithUv {
     Write-Host "Installing dependencies with uv (uv sync --locked) ..."
     & uv sync --locked
     if ($LASTEXITCODE -ne 0) { Show-InstallHelp; throw "uv sync failed (exit code $LASTEXITCODE)." }
+}
+
+# If pip is told to trust a CA file (global.cert), make sure Python can read it, so the error is clear.
+function Test-PipCertFile {
+    $cfg = (& python -m pip config get global.cert 2>$null | Select-Object -First 1)
+    if (-not $cfg) { return }
+    $path = "$cfg".Trim()
+    if (-not (Test-Path -LiteralPath $path)) {
+        Write-Host "pip is configured to trust a CA file that does not exist: $path" -ForegroundColor Red
+        throw "CA certificate file not found."
+    }
+    $res = (& python -c "import ssl,sys; ssl.create_default_context().load_verify_locations(sys.argv[1]); print('OK')" $path 2>&1 | Out-String).Trim()
+    if ($res -ne "OK") {
+        Write-Host "The CA file that pip trusts cannot be read as a certificate: $path" -ForegroundColor Red
+        Write-Host "  Python says: $res" -ForegroundColor Yellow
+        Write-Host "  '[X509] PEM lib' means the file starts with -----BEGIN CERTIFICATE----- but is damaged: a missing or cut-off line," -ForegroundColor Yellow
+        Write-Host "  a changed character, or a missing -----END CERTIFICATE----- line. This happens when the text is copied through" -ForegroundColor Yellow
+        Write-Host "  email, chat or a web page. Get the certificate file again as a file (attachment or export), not as pasted text." -ForegroundColor Yellow
+        Write-Host "  Check it:  python -c ""import ssl,sys; ssl.create_default_context().load_verify_locations(sys.argv[1]); print('OK')"" ""$path""" -ForegroundColor Yellow
+        throw "CA certificate file is not valid."
+    }
 }
 
 function Install-WithPip([string]$VenvDir) {
@@ -100,6 +122,7 @@ function Install-WithPip([string]$VenvDir) {
         $parts = $v.Split(".")
         if (([int]$parts[0] -gt 24) -or (([int]$parts[0] -eq 24) -and ([int]$parts[1] -ge 2))) { $env:PIP_USE_FEATURE = "truststore" }
     }
+    Test-PipCertFile
     $index = if ($env:PIP_INDEX_URL) { "PIP_INDEX_URL" } else { "your pip configuration" }
     Write-Host "Installing dependencies with pip from $index (hash-checked) ..."
     & $vpy -m pip install --require-hashes --no-deps --disable-pip-version-check -r $req | Out-Host
