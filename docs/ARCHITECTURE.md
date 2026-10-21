@@ -182,8 +182,8 @@ The backend's `ThinkingParser` handles **both**. It is a small streaming state m
 
 ### 7.3 Context window budgeting
 
-`max_model_len` is upstream configuration and must be confirmed (§9). For each request:
-`budget = max_model_len − max_output_tokens − safety margin`.
+`max_model_len` is **262,144 tokens** (confirmed from the server's own error message in the fourth report). Sending that much is slow and expensive, so the app uses a smaller working budget, `CONTEXT_BUDGET_TOKENS` (default 32,768, adjustable per conversation later). For each request:
+`budget = min(CONTEXT_BUDGET_TOKENS, max_model_len) − max_output_tokens − safety margin`.
 Request contents are added in priority order: system prompt → RAG context (capped, e.g. 30% of the budget) → newest history, walking back in time until the budget runs out. Tokens are counted with the Qwen tokenizer (`tokenizers` package, loaded offline), not `tiktoken`, because `tiktoken` miscounts Qwen tokens by roughly 10–20%.
 
 ### 7.4 RAG pipeline
@@ -192,11 +192,12 @@ Request contents are added in priority order: system prompt → RAG context (cap
   1. sha256 dedupe.
   2. Extract text: PDF with `pymupdf`, DOCX with `python-docx`, plus `txt` and `md`. Scanned PDFs without OCR fail clearly instead of being silently empty.
   3. Chunk at about 800 tokens with 100 tokens of overlap, keeping page numbers.
-  4. Embed in batches.
+  4. Embed through LiteLLM in batches of up to 32 chunks (`input_type: "passage"`), one batch at a time.
   5. Store.
 - **Scope:** documents are attached **per conversation**. This is more predictable than "search everything", and it is the way ChatGPT and Claude projects behave.
 - **Small-document shortcut:** if all attached text fits within the RAG budget, include it verbatim and skip retrieval. This is both higher quality and simpler.
-- **Retrieve:** embed the query, take the top-k (k=6) by cosine similarity, and prepend the chunks with `[source: filename p.N]` labels. The model is instructed to cite them, and the UI shows sources under the answer.
+- **Retrieve:** embed the query (`input_type: "query"`), take the top-k (k=6) by cosine similarity, and prepend the chunks with `[source: filename p.N]` labels. The model is instructed to cite them, and the UI shows sources under the answer.
+- **Embedding model (measured):** `llama-nemotron-embed-1b-v2` through LiteLLM returns 2,048-dimensional vectors. Query and passage hints are accepted, and a relevant passage scored 0.77 against a query versus 0.10 for an unrelated one. A batch of 32 took 4.5 s (about 7 chunks per second, so a 300-page document is a couple of minutes in the background), and a 1,376-token input worked, so 800-token chunks fit. Each call has about 3 s of fixed latency. At 2,048 floats per chunk, 10,000 chunks take about 80 MB.
 - **Limits:** a configurable maximum file size (default 25 MB) and allowed MIME types. Uploads are stored under `data/uploads/<sha256>`.
 
 ## 8. Cross-cutting concerns
@@ -225,7 +226,7 @@ Request contents are added in priority order: system prompt → RAG context (cap
 - LiteLLM's own spend logs remain the source of truth for usage.
 
 **Configuration** (`.env`, validated at startup by pydantic-settings; the app fails fast with a clear message):
-`LITELLM_BASE_URL` (default `http://172.17.58.139:4000/v1`; a trailing `/v1` is normalised), `LITELLM_API_KEY`, `CHAT_MODEL` (default `qwen3.8`), `EMBEDDING_PROVIDER` (`local` or `litellm`), `EMBEDDING_MODEL`, `MAX_CONTEXT_TOKENS`, `MAX_OUTPUT_TOKENS`, `DATA_DIR`, `SSL_CERT_FILE` (optional), `REQUEST_TIMEOUT_S`, `MAX_UPLOAD_MB`.
+`LITELLM_BASE_URL` (default `http://172.17.58.139:4000/v1`; a trailing `/v1` is normalised), `LITELLM_API_KEY`, `CHAT_MODEL` (default `qwen3.8`), `EMBEDDING_PROVIDER` (`local` or `litellm`), `EMBEDDING_MODEL`, `MAX_CONTEXT_TOKENS` (262144), `CONTEXT_BUDGET_TOKENS` (32768), `MAX_OUTPUT_TOKENS`, `DATA_DIR`, `SSL_CERT_FILE` (optional), `REQUEST_TIMEOUT_S`, `MAX_UPLOAD_MB`.
 
 ## 9. Decisions log and remaining unknowns
 
@@ -246,14 +247,15 @@ Request contents are added in priority order: system prompt → RAG context (cap
 | Corporate proxy | A cloud web proxy is set in Windows (not in environment variables). PyPI, npm, GitHub, Hugging Face and nodejs.org are reachable. | The LiteLLM client must ignore the system proxy (`httpx` reads the Windows proxy setting via `urllib`, so it needs `trust_env=False` for LiteLLM). Package and model downloads still use the proxy. |
 | Node on the laptop | Node v22.14.0 and npm 10.9.2 work (the first report's failure was not reproduced), and the npm registry is reachable through the proxy. | The frontend can be built on the laptop with `npm ci && npm run build`. CI still builds and tests it, but the laptop no longer depends on downloading CI artifacts. |
 | Git on the laptop | Git 2.32.0 works, but `C:\Program Files\Git\cmd` is not on PATH (it runs from Git Bash and VS Code). | Optional: add that folder to the user PATH. |
+| Context length | 262,144 tokens (`max_model_len`, from the server's 400 error) | See 7.3. The app uses a smaller working budget by default. |
+| Embeddings (fourth run) | `llama-nemotron-embed-1b-v2` works through LiteLLM: 2,048 dimensions, `input_type` accepted, batch of 32 in 4.5 s, 1,376-token input OK | **Use LiteLLM embeddings.** Local `fastembed` stays only as an optional fallback behind the `Embedder` interface, and is not built for v0.2.0 unless the model disappears. |
+| API key | A LiteLLM **virtual key** limited to LLM routes (`/model/info` and `/model_group/info` answer "Virtual key is not allowed to call this route"). Responses carry `x-litellm-key-spend`. | Least privilege is already in place. The app can show the key's running spend from that response header. |
 | Streaming and thinking (third run) | Streaming works: reasoning arrives token by token as `delta.reasoning_content`, then the answer as `delta.content`. A 250-word answer took 9.5 s end to end: about 1,300 reasoning tokens (7.7 s) before the first answer token, 1,450 completion tokens in total, so roughly 150 tokens/s. With thinking off, the first answer token took 0.3 s. | The UI must show the reasoning live ("Thinking…", collapsible) because the answer can start 8 s or more later. Thinking is a per-conversation toggle; title generation always runs with thinking off. Request `stream_options: {include_usage: true}` to get token counts. |
 | Model load and rate limits | The second run was slow and then hit HTTP 429 (LiteLLM cooldown). The third run, with 3 s gaps between calls, had no 429. | The model is shared and sometimes slow or overloaded. The app must treat 429/503 as normal: retry with backoff, show "model busy, retrying", and never fire parallel requests (for example title generation) at the same time as a chat. |
 | Network location | The system proxy was a cloud proxy in the first run and `172.17.61.19:8080` in the second. | Proxy settings depend on where the laptop is, so the app never hard-codes one. LiteLLM calls bypass it. |
 | Git from the laptop | Pulls always worked. Pushes were refused twice with HTTP 403 whose response carried only the company proxy's `Via:` header (no GitHub headers), then a later push worked (commit `2223203`). | Pushing is intermittent and depends on the proxy, so **do not depend on it**: develop and push from the cloud session, and use the laptop for `git pull` / `git checkout <tag>`. Do not try to bypass the proxy. Release tags are created on GitHub for the commit you confirmed is running. |
 
-**Still open** (a fourth, short run answers these: `check-env.ps1 -LiteLLMOnly`):
-1. **Context length.** `/model/info` and `/model_group/info` are forbidden for this key. Test 7 got HTTP 400 but its message was lost: PowerShell 5.1 keeps the HTTP error body in `ErrorDetails.Message`, which the script now reads. vLLM's 400 normally states the maximum context length. Otherwise `MAX_CONTEXT_TOKENS` must be set by hand from whoever runs vLLM.
-2. **Embeddings.** Test 8 checks `llama-nemotron-embed-1b-v2` through LiteLLM: vector size, whether `input_type` (query/passage) is needed, batching, long inputs, and a relevance sanity check.
+**Still open:** none for the environment. All checks in `scripts/check-env.ps1` have been answered. Re-run it (`-LiteLLMOnly` is enough) when the model list or the network changes.
 
 ```powershell
 $env:LITELLM_API_KEY = "sk-..."
