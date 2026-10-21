@@ -3,6 +3,7 @@
     python -m app.chat_cli "What is 17*23?"
     python -m app.chat_cli --no-think "Say hi"
     python -m app.chat_cli -i                  # interactive, keeps the conversation
+    python -m app.chat_cli --doc <id> "What does the report say about X?"   # use a document
 
 The app must be running (scripts\\run.cmd). The model's thinking is shown live under [thinking].
 """
@@ -40,15 +41,18 @@ def ask(
     model: str | None,
     show_thinking: bool,
     write: Callable[[str], None],
+    path: str = "/api/chat",
+    payload: dict | None = None,
 ) -> str | None:
     """Send one question, print the streamed answer, return the answer text (None on failure)."""
-    payload: dict = {"messages": messages, "thinking": thinking}
-    if model:
-        payload["model"] = model
+    if payload is None:
+        payload = {"messages": messages, "thinking": thinking}
+        if model:
+            payload["model"] = model
     answer: list[str] = []
     section = None
     try:
-        with client.stream("POST", "/api/chat", json=payload) as response:
+        with client.stream("POST", path, json=payload) as response:
             if response.status_code != 200:
                 body = json.loads(response.read() or b"{}")
                 error = body.get("error", body.get("detail", body))
@@ -64,6 +68,15 @@ def ask(
                     write(data["delta"])
                     if name == "content":
                         answer.append(data["delta"])
+                elif name == "sources":
+                    skipped = data.get("skipped") or []
+                    found = ", ".join(
+                        f"[{x['n']}] {x['filename']}" + (f" p.{x['page']}" if x["page"] else "")
+                        for x in data["sources"]
+                    )
+                    write(f"[sources] mode={data['mode']} {found}\n")
+                    for item in skipped:
+                        write(f"[skipped] {item['filename']} is {item['status']}\n")
                 elif name == "error":
                     write(f"\n[error] {data.get('message')} ({data.get('code')})\n")
                     return None
@@ -90,6 +103,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hide-thinking", action="store_true", help="do not print the thinking")
     parser.add_argument("--model", help="model id (default: the app's chat model)")
     parser.add_argument("--system", help="a system prompt")
+    parser.add_argument(
+        "--doc",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="document id (see upload-doc -List)",
+    )
     parser.add_argument("--url", default=f"http://127.0.0.1:{os.environ.get('PORT', '8000')}")
     args = parser.parse_args(argv)
 
@@ -109,6 +129,34 @@ def main(argv: list[str] | None = None) -> int:
 
     timeout = httpx.Timeout(10.0, read=600.0)  # long thinking pauses are normal
     with httpx.Client(base_url=args.url, timeout=timeout, trust_env=False) as client:
+        conversation: str | None = None
+
+        def start_conversation() -> str | None:
+            """With --doc the question goes to a saved conversation that has the documents."""
+            made = client.post(
+                "/api/conversations",
+                json={"thinking": not args.no_think, "system_prompt": args.system or ""}
+                | ({"model": args.model} if args.model else {}),
+            )
+            if made.status_code != 201:
+                write(f"[error {made.status_code}] {made.text}\n")
+                return None
+            new_id = made.json()["id"]
+            for doc in args.doc:
+                attached = client.post(f"/api/conversations/{new_id}/documents/{doc}")
+                if attached.status_code != 200:
+                    write(f"[error {attached.status_code}] {attached.text}\n")
+                    return None
+            return new_id
+
+        if args.doc:
+            try:
+                conversation = start_conversation()
+            except httpx.ConnectError:
+                write("Cannot reach the app. Is it running? Start it with scripts\\run.cmd\n")
+                return 1
+            if conversation is None:
+                return 1
         question = first
         while True:
             if not question:
@@ -120,6 +168,10 @@ def main(argv: list[str] | None = None) -> int:
                     return 0
                 if question == "/new":
                     history = history[:1] if args.system else []
+                    if args.doc:
+                        conversation = start_conversation()
+                        if conversation is None:
+                            return 1
                     question = ""
                     continue
                 if not question:
@@ -132,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
                 model=args.model,
                 show_thinking=not args.hide_thinking,
                 write=write,
+                path=f"/api/conversations/{conversation}/messages" if conversation else "/api/chat",
+                payload={"content": question} if conversation else None,
             )
             if answer is None:
                 return 1

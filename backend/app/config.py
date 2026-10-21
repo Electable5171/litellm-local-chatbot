@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     max_chunks_per_document: int = Field(default=3000, ge=1)
     chunk_tokens: int = Field(default=800, ge=100)
     chunk_overlap_tokens: int = Field(default=100, ge=0)
+    rag_context_tokens: int = Field(default=9000, ge=500)
+    rag_top_k: int = Field(default=6, ge=1, le=50)
     embedding_batch_size: int = Field(default=32, ge=1, le=256)
 
     # HTTP behaviour towards LiteLLM

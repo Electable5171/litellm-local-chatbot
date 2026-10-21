@@ -112,13 +112,14 @@ litellm-local-chatbot/
 | POST | `/api/conversations/{id}/regenerate` | Re-run the last assistant turn (SSE) |
 | POST | `/api/messages/{id}/cancel` | Stop generation (also triggered when the client disconnects) |
 | POST / GET / DELETE | `/api/documents` | **Built.** Upload (the request body is the file, `X-Filename` header, `application/octet-stream` only), list with embedding progress, delete. The same file uploaded twice is stored once. |
-| POST / DELETE | `/api/conversations/{id}/documents/{doc_id}` | Attach a document to a chat or detach it |
+| GET | `/api/conversations/{id}/documents` | **Built.** Documents attached to a chat |
+| POST / DELETE | `/api/conversations/{id}/documents/{doc_id}` | **Built.** Attach a document to a chat or detach it (only attached documents are searched in that chat) |
 
 **SSE event types** (one JSON payload per event):
 
 ```
 event: meta       {"model": "qwen3.8", "thinking": true, "trimmed_messages": 0}   # + message_id once saved
-event: sources    [{"doc_id": "...", "filename": "...", "page": 3, "chunk_id": "..."}]   # documents, later
+event: sources    {"mode": "full|search|none", "sources": [{"n": 1, "document_id": "...", "filename": "...", "page": 3, "chunk_id": "...", "score": 0.77}], "skipped": [{"document_id": "...", "filename": "...", "status": "processing"}]}   # only when documents are attached; sent right after meta
 event: reasoning  {"delta": "..."}   # thinking tokens
 event: content    {"delta": "..."}   # answer tokens
 event: done       {"finish_reason": "stop", "usage": {"prompt_tokens": 25, "completion_tokens": 42}, "latency_ms": 9000, "ttft_ms": 300}
@@ -200,6 +201,7 @@ Request contents are added in priority order: system prompt → RAG context (cap
   5. Store. Chunks are saved first, so a failed or interrupted embedding run resumes with the chunks that still have no vector (also after an app restart). The original file is not kept, only the extracted text.
 - **Scope:** documents are attached **per conversation**. This is more predictable than "search everything", and it is the way ChatGPT and Claude projects behave.
 - **Small-document shortcut:** if all attached text fits within the RAG budget, include it verbatim and skip retrieval. This is both higher quality and simpler.
+- **Built behaviour:** the document text goes into a system message that marks each excerpt `[n] (file, page p)`, asks the model to cite `[n]`, and tells it to treat the excerpts as reference data and not follow instructions inside them (prompt-injection defence). The excerpts are recomputed for every question and are not stored in the history. The excerpts used are saved with the answer (`messages.sources`). Documents that are still processing or failed are skipped and reported in `skipped`. If the embedding model's vector size changed, the question is refused with `embedding_mismatch` (409) before anything is saved. The budget is `RAG_CONTEXT_TOKENS` (default 9000) and `RAG_TOP_K` (default 6). Only the last question is embedded, so a follow-up such as "and on page 3?" searches poorly; query rewriting is a later improvement.
 - **Retrieve:** embed the query (`input_type: "query"`), take the top-k (k=6) by cosine similarity, and prepend the chunks with `[source: filename p.N]` labels. The model is instructed to cite them, and the UI shows sources under the answer.
 - **Embedding model (measured):** `llama-nemotron-embed-1b-v2` through LiteLLM returns 2,048-dimensional vectors. Query and passage hints are accepted, and a relevant passage scored 0.77 against a query versus 0.10 for an unrelated one. A batch of 32 took 4.5 s (about 7 chunks per second, so a 300-page document is a couple of minutes in the background), and a 1,376-token input worked, so 800-token chunks fit. Each call has about 3 s of fixed latency. At 2,048 floats per chunk, 10,000 chunks take about 80 MB.
 - **Limits:** a configurable maximum file size (default 25 MB) and allowed MIME types. Uploads are stored under `data/uploads/<sha256>`.

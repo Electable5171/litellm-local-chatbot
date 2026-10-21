@@ -41,12 +41,18 @@ The thinking is printed live under `[thinking]`, then the answer under `[answer]
 
 ## Documents (in progress)
 
-The backend can read PDF, DOCX, Markdown and text files (up to 25 MB; a PDF up to 500 pages), split them into parts and embed them through LiteLLM (`llama-nemotron-embed-1b-v2`). The web UI for attaching documents to a chat comes next. To check on the laptop that reading and embedding work:
+The backend can read PDF, DOCX, Markdown and text files (up to 25 MB; a PDF up to 500 pages), split them into parts and embed them through LiteLLM (`llama-nemotron-embed-1b-v2`). Documents are attached per conversation, and only attached documents are searched in that chat. Small documents are given to the model in full; larger ones are searched and the best parts are used, with `[1]`-style source labels. The web UI for attaching documents comes next; until then use the command line. To check on the laptop that reading and embedding work:
 
 ```powershell
 .\scripts\upload-doc.cmd C:\path\to\file.pdf     # uploads and shows progress
 .\scripts\upload-doc.cmd -List
 .\scripts\upload-doc.cmd -Delete <id>
+```
+
+Ask a question about a document (it prints the `[sources]` it used):
+
+```powershell
+.\scripts\chat.cmd --doc <id> "What does this document say about X?"
 ```
 
 Only the extracted text is stored (in `backend\data\chat.db`, in plain text like the chats), not the original file.

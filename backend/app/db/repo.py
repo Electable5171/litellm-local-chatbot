@@ -162,6 +162,7 @@ MESSAGE_FIELDS = {
     "ttft_ms",
     "thinking_ms",
     "trimmed",
+    "sources",
 }
 
 

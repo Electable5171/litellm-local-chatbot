@@ -12,6 +12,7 @@ A turn is stored in this order, so a failure never leaves a half-saved exchange:
 An assistant message still marked ``streaming`` after a restart is turned into an error at startup.
 """
 
+import json
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -20,10 +21,13 @@ from typing import Any
 import anyio
 
 from app.config import Settings
+from app.db import documents as doc_store
 from app.db import repo
 from app.db.database import Database
 from app.errors import ApiError
 from app.services.chat import ChatRequest, ChatService, Event
+from app.services.documents import document_json
+from app.services.retrieval import Context, Retriever
 
 log = logging.getLogger("app.conversations")
 
@@ -73,8 +77,16 @@ def message_json(row: repo.Row) -> dict[str, Any]:
         "ttft_ms": row["ttft_ms"],
         "thinking_ms": row["thinking_ms"],
         "trimmed": bool(row["trimmed"]),
+        "sources": _sources_json(row.get("sources")),
         "created_at": row["created_at"],
     }
+
+
+def _sources_json(raw: str | None) -> dict[str, Any] | None:
+    try:
+        return json.loads(raw) if raw else None
+    except ValueError:
+        return None
 
 
 def _history(messages: list[repo.Row]) -> list[dict[str, str]]:
@@ -90,8 +102,15 @@ def _history(messages: list[repo.Row]) -> list[dict[str, str]]:
 
 
 class ConversationService:
-    def __init__(self, db: Database, chat: ChatService, settings: Settings) -> None:
+    def __init__(
+        self,
+        db: Database,
+        chat: ChatService,
+        settings: Settings,
+        retriever: Retriever | None = None,
+    ) -> None:
         self._db = db
+        self._retriever = retriever
         self._chat = chat
         self._settings = settings
         self._active: set[str] = set()  # assistant messages being written by this process
@@ -160,6 +179,36 @@ class ConversationService:
         if not await self._db.run(lambda c: repo.delete_conversation(c, conversation_id)):
             raise _not_found()
 
+    # -- attached documents ------------------------------------------------------------------
+
+    async def documents(self, conversation_id: str) -> list[dict[str, Any]]:
+        def load(conn):
+            if repo.get_conversation(conn, conversation_id) is None:
+                return None
+            return doc_store.attached_documents(conn, conversation_id)
+
+        rows = await self._db.run(load)
+        if rows is None:
+            raise _not_found()
+        return [document_json(r) for r in rows]
+
+    async def attach(self, conversation_id: str, document_id: str) -> list[dict[str, Any]]:
+        def work(conn):
+            if repo.get_conversation(conn, conversation_id) is None:
+                raise _not_found()
+            if doc_store.get_document(conn, document_id) is None:
+                raise ApiError("document_not_found", "That document does not exist.", 404)
+            doc_store.attach(conn, conversation_id, document_id)
+
+        await self._db.run(work)
+        return await self.documents(conversation_id)
+
+    async def detach(self, conversation_id: str, document_id: str) -> list[dict[str, Any]]:
+        removed = await self._db.run(lambda c: doc_store.detach(c, conversation_id, document_id))
+        if not removed:
+            raise ApiError("document_not_attached", "That document is not attached.", 404)
+        return await self.documents(conversation_id)
+
     # -- turns -------------------------------------------------------------------------------
 
     async def send(
@@ -205,6 +254,12 @@ class ConversationService:
             history = _history(messages) + [{"role": "user", "content": content or ""}]
             drop = None
 
+        context: Context | None = None
+        if self._retriever is not None:
+            question = history[-1]["content"]
+            context = await self._retriever.context_for(conversation_id, question)
+            if context is not None and context.system_message:
+                history = [{"role": "system", "content": context.system_message}, *history]
         if conv["system_prompt"]:
             history = [{"role": "system", "content": conv["system_prompt"]}, *history]
         prepared = self._chat.prepare(
@@ -213,6 +268,12 @@ class ConversationService:
             )
         )
         stream = await self._chat.open_stream(prepared)  # raises before anything is saved
+
+        sources = (
+            {"mode": context.mode, "sources": context.sources, "skipped": context.skipped}
+            if context is not None
+            else None
+        )
 
         def save(conn):
             with repo.transaction(conn):
@@ -224,6 +285,8 @@ class ConversationService:
                         conn, conversation_id, "user", content=content or ""
                     )
                 reply = repo.add_message(conn, conversation_id, "assistant", status="streaming")
+                if sources is not None:
+                    repo.update_message(conn, reply["id"], sources=json.dumps(sources))
                 title = conv["title"] or make_title(user_row["content"])
                 repo.update_conversation(conn, conversation_id, title=title, touch=True)
                 return user_row, reply
@@ -240,7 +303,7 @@ class ConversationService:
             "message_id": reply["id"],
         }
         events = self._persisted(self._chat.events(prepared, stream), reply["id"], prepared.trimmed)
-        return meta, _with_meta(events, meta)
+        return meta, _with_meta(events, meta, sources)
 
     async def _persisted(
         self, events: AsyncIterator[Event], message_id: str, trimmed: int
@@ -311,10 +374,17 @@ class ConversationService:
                     self._active.discard(message_id)
 
 
-async def _with_meta(events: AsyncIterator[Event], extra: dict[str, Any]) -> AsyncIterator[Event]:
+async def _with_meta(
+    events: AsyncIterator[Event], extra: dict[str, Any], sources: dict[str, Any] | None
+) -> AsyncIterator[Event]:
     try:
         async for name, data in events:
-            yield (name, {**data, **extra}) if name == "meta" else (name, data)
+            if name == "meta":
+                yield name, {**data, **extra}
+                if sources is not None:
+                    yield "sources", sources
+            else:
+                yield name, data
     finally:
         aclose = getattr(events, "aclose", None)
         if aclose:

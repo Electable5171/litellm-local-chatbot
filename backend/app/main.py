@@ -19,6 +19,7 @@ from app.services.documents import DocumentService
 from app.services.embeddings import Embedder
 from app.services.health import HealthService
 from app.services.llm import LLMClient
+from app.services.retrieval import Retriever
 
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
@@ -36,9 +37,11 @@ def create_app(settings: Settings | None = None, llm: LLMClient | None = None) -
         db = Database(settings.data_dir / "chat.db")
         db.open()
         app.state.db = db
-        app.state.conversations = ConversationService(db, app.state.chat, settings)
+        embedder = Embedder(app.state.llm, settings)
+        retriever = Retriever(db, embedder, settings)
+        app.state.conversations = ConversationService(db, app.state.chat, settings, retriever)
         await app.state.conversations.startup()
-        app.state.documents = DocumentService(db, Embedder(app.state.llm, settings), settings)
+        app.state.documents = DocumentService(db, embedder, settings)
         await app.state.documents.startup()
         try:
             yield

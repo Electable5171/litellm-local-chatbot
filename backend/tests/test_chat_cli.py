@@ -98,3 +98,43 @@ def test_app_not_running_gives_a_hint():
     answer, printed = run_ask(handler)
     assert answer is None
     assert "Is it running?" in printed
+
+
+def test_sources_are_printed_and_a_conversation_path_and_payload_can_be_used():
+    seen = {}
+
+    def handler(request):
+        seen["path"], seen["body"] = request.url.path, json.loads(request.content)
+        return httpx.Response(
+            200,
+            content=sse(
+                (
+                    "sources",
+                    {
+                        "mode": "search",
+                        "sources": [{"n": 1, "filename": "a.pdf", "page": 3}],
+                        "skipped": [{"filename": "b.pdf", "status": "processing"}],
+                    },
+                ),
+                ("content", {"delta": "see [1]"}),
+                DONE,
+            ),
+        )
+
+    out: list[str] = []
+    with make_client(handler) as client:
+        answer = ask(
+            client,
+            [],
+            thinking=True,
+            model=None,
+            show_thinking=True,
+            write=out.append,
+            path="/api/conversations/c1/messages",
+            payload={"content": "q"},
+        )
+    printed = "".join(out)
+    assert answer == "see [1]"
+    assert seen == {"path": "/api/conversations/c1/messages", "body": {"content": "q"}}
+    assert "[sources] mode=search [1] a.pdf p.3" in printed
+    assert "[skipped] b.pdf is processing" in printed
