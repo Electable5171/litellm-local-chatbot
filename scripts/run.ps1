@@ -36,10 +36,20 @@ if (-not (Test-Path $envFile)) {
     exit 1
 }
 
+# Run a command and return its output. pip prints harmless warnings on stderr (for example
+# "features are always enabled: truststore"), and Windows PowerShell 5.1 turns any stderr text from
+# a native command into a terminating error when $ErrorActionPreference is "Stop".
+function Get-NativeOutput([scriptblock]$Command) {
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { return @(& $Command 2>&1 | ForEach-Object { "$_" }) }
+    finally { $ErrorActionPreference = $saved }
+}
+
 function Test-PipIndexConfigured {
     if ($env:PIP_INDEX_URL) { return $true }
     if (-not (Get-Command python -ErrorAction SilentlyContinue)) { return $false }
-    $cfg = (& python -m pip config list 2>$null) -join "`n"
+    $cfg = (Get-NativeOutput { python -m pip config list }) -join "`n"
     return ($cfg -match "index-url")
 }
 
@@ -80,7 +90,9 @@ function Install-WithUv {
 
 # If pip is told to trust a CA file (global.cert), make sure Python can read it, so the error is clear.
 function Test-PipCertFile {
-    $cfg = (& python -m pip config get global.cert 2>$null | Select-Object -First 1)
+    # Only a line that looks like a path counts; warnings printed by pip are ignored.
+    $cfg = Get-NativeOutput { python -m pip config get global.cert } |
+        Where-Object { $_ -notmatch "^(WARNING|ERROR|NOTICE)" -and $_.Trim() } | Select-Object -First 1
     if (-not $cfg) { return }
     $path = "$cfg".Trim()
     if (-not (Test-Path -LiteralPath $path)) {
@@ -118,7 +130,7 @@ function Install-WithPip([string]$VenvDir) {
     }
     # Use the Windows certificate store (pip 24.2+), because a company index or proxy has its own CA.
     if (-not $env:PIP_USE_FEATURE) {
-        $v = (& $vpy -m pip --version) -replace "^pip (\d+)\.(\d+).*", '$1.$2'
+        $v = (Get-NativeOutput { & $vpy -m pip --version } | Select-Object -First 1) -replace "^pip (\d+)\.(\d+).*", '$1.$2'
         $parts = $v.Split(".")
         if (([int]$parts[0] -gt 24) -or (([int]$parts[0] -eq 24) -and ([int]$parts[1] -ge 2))) { $env:PIP_USE_FEATURE = "truststore" }
     }
