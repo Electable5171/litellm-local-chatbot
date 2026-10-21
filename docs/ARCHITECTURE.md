@@ -104,6 +104,7 @@ litellm-local-chatbot/
 |--------|------|---------|
 | GET | `/api/health` | Liveness of the app, plus a cached LiteLLM reachability probe (`/v1/models`) |
 | GET | `/api/models` | Proxy of LiteLLM `/v1/models` (filtered to allow-listed models) |
+| POST | `/api/chat` | **Built.** Stateless streaming core: the caller sends the messages, the response is an SSE stream. The conversation endpoints below wrap it and add saving. |
 | GET / POST | `/api/conversations` | List and create conversations |
 | GET / PATCH / DELETE | `/api/conversations/{id}` | Read with messages, rename, delete |
 | POST | `/api/conversations/{id}/messages` | Send a user message; **the response is an SSE stream** |
@@ -115,13 +116,15 @@ litellm-local-chatbot/
 **SSE event types** (one JSON payload per event):
 
 ```
-event: meta       {"message_id": "...", "model": "..."}
-event: sources    [{"doc_id": "...", "filename": "...", "page": 3, "chunk_id": "..."}]
+event: meta       {"model": "qwen3.8", "thinking": true, "trimmed_messages": 0}   # + message_id once saved
+event: sources    [{"doc_id": "...", "filename": "...", "page": 3, "chunk_id": "..."}]   # documents, later
 event: reasoning  {"delta": "..."}   # thinking tokens
 event: content    {"delta": "..."}   # answer tokens
-event: done       {"usage": {...}, "latency_ms": 1234, "finish_reason": "stop"}
-event: error      {"code": "upstream_timeout", "message": "..."}
+event: done       {"finish_reason": "stop", "usage": {"prompt_tokens": 25, "completion_tokens": 42}, "latency_ms": 9000, "ttft_ms": 300}
+event: error      {"code": "upstream_interrupted", "message": "..."}   # only after the stream has started
 ```
+
+Failures **before** the first event (model busy, key rejected, LiteLLM unreachable, unknown model, message too long) are ordinary HTTP errors with a JSON body `{"error": {"code", "message", "retry_after_s"?}}`: 503 `upstream_busy`, 502 `upstream_auth` / `upstream_unreachable` / `upstream_error`, 413 `context_too_long`, 400 `model_not_allowed` / `invalid_messages`. A `finish_reason` of `length` means the output limit was reached (thinking counts towards it).
 
 ## 6. Data model (SQLite)
 
@@ -226,7 +229,7 @@ Request contents are added in priority order: system prompt → RAG context (cap
 - LiteLLM's own spend logs remain the source of truth for usage.
 
 **Configuration** (`.env`, validated at startup by pydantic-settings; the app fails fast with a clear message):
-`LITELLM_BASE_URL` (default `http://172.17.58.139:4000/v1`; a trailing `/v1` is normalised), `LITELLM_API_KEY`, `CHAT_MODEL` (default `qwen3.8`), `EMBEDDING_PROVIDER` (`local` or `litellm`), `EMBEDDING_MODEL`, `MAX_CONTEXT_TOKENS` (262144), `CONTEXT_BUDGET_TOKENS` (32768), `MAX_OUTPUT_TOKENS`, `DATA_DIR`, `SSL_CERT_FILE` (optional), `REQUEST_TIMEOUT_S`, `MAX_UPLOAD_MB`.
+`LITELLM_BASE_URL` (default `http://172.17.58.139:4000/v1`; a trailing `/v1` is normalised), `LITELLM_API_KEY`, `CHAT_MODEL` (default `qwen3.8`), `EMBEDDING_PROVIDER` (`local` or `litellm`), `EMBEDDING_MODEL`, `MAX_CONTEXT_TOKENS` (262144), `CONTEXT_BUDGET_TOKENS` (32768), `MAX_OUTPUT_TOKENS` (8192), `DATA_DIR`, `SSL_CERT_FILE` (optional), `REQUEST_TIMEOUT_S`, `MAX_UPLOAD_MB`.
 
 ## 9. Decisions log and remaining unknowns
 
