@@ -67,7 +67,7 @@ export default function App() {
       setThinking(conversation.thinking)
       setChosenModel(conversation.model)
     },
-    onChanged: conversations.refresh,
+    onChanged: conversations.refreshSoon,
   })
 
   // Settings of a saved chat are saved with it, so they are still there when it is opened again.

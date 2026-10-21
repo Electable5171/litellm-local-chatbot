@@ -11,6 +11,7 @@ export function useConversations() {
   const [shown, setShown] = useState('')
   const queryRef = useRef(query)
   const latest = useRef(0)
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([])
 
   useEffect(() => {
     queryRef.current = query
@@ -37,6 +38,18 @@ export function useConversations() {
     return () => clearTimeout(timer)
   }, [query, refresh])
 
+  useEffect(() => () => timers.current.forEach(clearTimeout), [])
+
+  /**
+   * Refresh now, and twice more shortly after: the model writes a better title for a new chat in
+   * the background once its first answer is done, which takes a few seconds.
+   */
+  const refreshSoon = useCallback(() => {
+    void refresh()
+    timers.current.forEach(clearTimeout)
+    timers.current = [3000, 8000].map((ms) => setTimeout(() => void refresh(), ms))
+  }, [refresh])
+
   const rename = useCallback(
     async (id: string, title: string) => {
       try {
@@ -61,5 +74,5 @@ export function useConversations() {
     [refresh],
   )
 
-  return { items, error, query, shown, setQuery, refresh, rename, remove }
+  return { items, error, query, shown, setQuery, refresh, refreshSoon, rename, remove }
 }

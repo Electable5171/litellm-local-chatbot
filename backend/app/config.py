@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     context_budget_tokens: int = 32_768
     max_output_tokens: int = 8_192  # reasoning tokens count towards this
 
+    # Let the model write a short title for a chat after its first answer
+    auto_titles: bool = True
+
     # Documents (RAG)
     max_upload_mb: int = Field(default=25, ge=1, le=200)
     max_pdf_pages: int = Field(default=500, ge=1)

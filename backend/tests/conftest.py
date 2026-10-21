@@ -27,5 +27,6 @@ def settings(tmp_path):
         data_dir=tmp_path / "data",
         max_retries=0,
         health_cache_s=60,
+        auto_titles=False,  # tests that look at titles switch it on
         allowed_models="qwen3.8,nemotron-nano,gpt-oss",
     )
