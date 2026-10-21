@@ -62,7 +62,7 @@ flowchart LR
 | 1 | Build vs adopt | Custom build | Open WebUI, LibreChat | Full control and a learning goal. Cost: we own streaming, history, and RAG edge cases. |
 | 2 | Backend | Python 3.12 + FastAPI + uvicorn | Node or Next.js | Fits a DS/MLOps team; mature RAG and parsing libraries; async streaming is first-class. |
 | 3 | Frontend | React + Vite + TypeScript | Next.js, Streamlit | SPA only; no SSR needed for a localhost app. Streamlit can't deliver a ChatGPT-grade UX. |
-| 4 | Persistence | SQLite in WAL mode via SQLAlchemy 2.x + Alembic | Postgres | Single user means no server to run. The data is one file, so backup is a file copy. Alembic keeps a later move to Postgres possible. |
+| 4 | Persistence | SQLite in WAL mode through Python's built-in `sqlite3`, with numbered SQL migration files (`PRAGMA user_version`) | SQLAlchemy + Alembic, Postgres | Single user means no server to run. The data is one file, so backup is a file copy. The schema is a handful of tables, and every extra package has to get through the company package index, so an ORM and a migration tool cost more than they save. Migrations are forward-only; rollback is the automatic pre-migration backup. |
 | 5 | Vector store | `sqlite-vec` in the same SQLite file, behind a `VectorStore` interface | Chroma, Qdrant, LanceDB, FAISS | One file, nothing extra to run. A personal corpus (≤ ~100k chunks) is well within brute-force or `sqlite-vec` range. Because of the interface, we can swap stores later without touching the rest of the code. |
 | 6 | Browser ↔ backend streaming | SSE over `fetch()` with a `ReadableStream` | WebSockets | Responses only flow one way. SSE is plain HTTP, simpler to debug, and works through proxies. `fetch` is used instead of `EventSource` because the request needs a POST body. |
 | 7 | LLM client | `openai` Python SDK pointed at LiteLLM `base_url` | Raw httpx, LangChain | LiteLLM is OpenAI-compatible. The SDK handles streaming, retries, and timeouts, and it keeps dependencies lean. No LangChain: it adds too much abstraction for what we need. |
@@ -85,7 +85,7 @@ litellm-local-chatbot/
 │   │   │   ├── chat.py        # history assembly, token budget, thinking parser
 │   │   │   └── titles.py      # auto-title generation
 │   │   ├── rag/               # extract.py, chunk.py, embed.py, store.py, retrieve.py
-│   │   └── db/                # models.py, session.py, migrations/ (Alembic)
+│   │   └── db/                # database.py, repo.py, migrations/*.sql
 │   ├── tests/                 # pytest; LiteLLM is mocked with respx
 │   └── pyproject.toml / uv.lock
 ├── frontend/
@@ -105,7 +105,7 @@ litellm-local-chatbot/
 |--------|------|---------|
 | GET | `/api/health` | Liveness of the app, plus a cached LiteLLM reachability probe (`/v1/models`) |
 | GET | `/api/models` | Proxy of LiteLLM `/v1/models` (filtered to allow-listed models) |
-| POST | `/api/chat` | **Built.** Stateless streaming core: the caller sends the messages, the response is an SSE stream. The conversation endpoints below wrap it and add saving. |
+| POST | `/api/chat` | **Built.** Stateless streaming core: the caller sends the messages, the response is an SSE stream. Used by the command-line chat; the web UI uses the conversation endpoints below, which wrap it and add saving. |
 | GET / POST | `/api/conversations` | List and create conversations |
 | GET / PATCH / DELETE | `/api/conversations/{id}` | Read with messages, rename, delete |
 | POST | `/api/conversations/{id}/messages` | Send a user message; **the response is an SSE stream** |
@@ -222,7 +222,7 @@ Request contents are added in priority order: system prompt → RAG context (cap
 | Stream cut mid-answer | Partial answer is saved as `status=error` or `cancelled` and shown with a Retry button. |
 | Context overflow (400 from upstream) | Caught and mapped to a friendly message; the budgeter should prevent it. |
 | Embedding model changed | Dimension mismatch is detected at startup and documents are flagged "needs re-index". |
-| DB corruption or a bad migration | `run` script takes an automatic SQLite backup **before** running Alembic migrations (keeps the last 5). |
+| DB corruption or a bad migration | The app takes an automatic SQLite backup (`data/backups/`) **before** applying a migration to an existing database (keeps the last 5), runs each migration in a transaction, and refuses to open a database written by a newer version. |
 
 **Observability (laptop scale)**
 - Structured JSON logs to a rotating file in `data/logs/` with a request ID. Prompts are never logged at INFO level.
@@ -277,7 +277,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-env.ps1
 1. Checks `.env`.
 2. Backs up the DB.
 3. Runs `uv sync`.
-4. Runs `alembic upgrade head`.
+4. Starts the app, which applies pending SQL migrations (after a backup).
 5. Starts uvicorn on `127.0.0.1:8000`.
 
 A `run.cmd` wrapper calls it with `-ExecutionPolicy Bypass`, so it works under a restrictive per-user policy without admin rights.
@@ -288,7 +288,7 @@ git fetch --tags; git checkout v0.1.0
 .\scripts\run.cmd   # if a migration ran, restore the pre-upgrade DB backup from data\backups\
 ```
 
-Rollback across a schema change needs the automatic pre-migration DB backup, because a newer schema is not guaranteed to work with older code. Every Alembic migration also implements `downgrade()`.
+Rollback across a schema change needs the automatic pre-migration DB backup, because a newer schema is not guaranteed to work with older code. Migrations are forward-only, so going back means restoring the backup.
 
 **Proposed milestones**
 

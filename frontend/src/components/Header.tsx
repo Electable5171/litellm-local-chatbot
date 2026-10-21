@@ -8,7 +8,7 @@ interface Props {
   onModel: (model: string) => void
   thinking: boolean
   onThinking: (on: boolean) => void
-  onNewChat: () => void
+  onMenu: () => void
   busy: boolean
 }
 
@@ -26,10 +26,13 @@ function status(server: HealthState): { tone: 'ok' | 'warn' | 'bad' | 'wait'; te
   }
 }
 
-export function Header({ server, models, model, onModel, thinking, onThinking, onNewChat, busy }: Props) {
+export function Header({ server, models, model, onModel, thinking, onThinking, onMenu, busy }: Props) {
   const state = status(server)
   return (
     <header className="header">
+      <button type="button" className="ghost menu" onClick={onMenu} aria-label="Show chats">
+        Chats
+      </button>
       <h1>Local Chat</h1>
       <span className={`status ${state.tone}`} role="status">
         <span className="dot" aria-hidden="true" />
@@ -56,9 +59,6 @@ export function Header({ server, models, model, onModel, thinking, onThinking, o
         />
         <span>Thinking</span>
       </label>
-      <button type="button" className="ghost" onClick={onNewChat}>
-        New chat
-      </button>
     </header>
   )
 }

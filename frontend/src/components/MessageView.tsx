@@ -30,7 +30,7 @@ function Footer({ message }: { message: UiMessage }) {
         <span className="note">Cut off at the output limit (thinking counts towards it)</span>
       )}
       {message.trimmed > 0 && (
-        <span className="note">{message.trimmed} older messages left out to fit the model</span>
+        <span className="note">Older messages were left out to fit the model</span>
       )}
       {parts.length > 0 && <span>{parts.join(' · ')}</span>}
       {message.content && (
