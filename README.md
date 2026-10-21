@@ -6,6 +6,26 @@ A ChatGPT-style web chat for a single user. It runs locally on the office laptop
 - Stack: a FastAPI + SQLite (sqlite-vec) backend and a React + Vite + TypeScript frontend
 - Laptop environment check: `scripts/check-env.ps1` (read-only, needs no admin rights)
 
+## Run it (office laptop, Windows, no admin rights)
+
+```powershell
+git pull
+.\scripts\run.cmd
+```
+
+The first run creates `backend\.env` from `backend\.env.example` and asks you to set `LITELLM_API_KEY` (your LiteLLM virtual key). Run it again, then open http://127.0.0.1:8000/api/health. The web UI comes in a later release; for now only the API is available.
+
+The app listens on `127.0.0.1` only, because it has no login.
+
+## Develop and test
+
+```bash
+cd backend
+uv sync --locked
+uv run ruff check . && uv run ruff format --check .
+uv run pytest -q          # LiteLLM is mocked; no network or key needed
+```
+
 ## Branching (GitHub Flow)
 
 - `main` is always the version that has been tested and runs on the office laptop.
