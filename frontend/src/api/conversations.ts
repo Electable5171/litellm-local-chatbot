@@ -15,8 +15,13 @@ const json = (method: string, body: object): RequestInit => ({
 
 const url = (id: string) => `/api/conversations/${encodeURIComponent(id)}`
 
-export const listConversations = async (signal?: AbortSignal) =>
-  (await request<{ conversations: Conversation[] }>('/api/conversations', { signal })).conversations
+export const listConversations = async (query = '', signal?: AbortSignal) =>
+  (
+    await request<{ conversations: Conversation[] }>(
+      query ? `/api/conversations?q=${encodeURIComponent(query)}` : '/api/conversations',
+      { signal },
+    )
+  ).conversations
 
 export const createConversation = (body: { model?: string; thinking: boolean }) =>
   request<Conversation>('/api/conversations', json('POST', body))

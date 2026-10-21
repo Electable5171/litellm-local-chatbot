@@ -69,6 +69,38 @@ def list_conversations(conn: sqlite3.Connection) -> list[Row]:
     return [dict(r) for r in rows]
 
 
+def _like(term: str) -> str:
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def search_conversations(
+    conn: sqlite3.Connection, term: str, limit: int = 50
+) -> list[tuple[Row, str | None]]:
+    """Conversations whose title or message text contains ``term`` (newest first).
+
+    Returns (conversation, text of the first matching message or None when only the title matched).
+    SQLite's LIKE ignores case for plain ASCII letters only; other scripts match exactly.
+    """
+    pattern = _like(term)
+    rows = conn.execute(
+        "SELECT * FROM conversations c WHERE c.title LIKE ? ESCAPE '\\'"
+        " OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id"
+        "  AND m.content LIKE ? ESCAPE '\\')"
+        " ORDER BY c.updated_at DESC, c.id DESC LIMIT ?",
+        (pattern, pattern, limit),
+    ).fetchall()
+    found: list[tuple[Row, str | None]] = []
+    for row in rows:
+        hit = conn.execute(
+            "SELECT content FROM messages WHERE conversation_id = ? AND content LIKE ? ESCAPE '\\'"
+            " ORDER BY position LIMIT 1",
+            (row["id"], pattern),
+        ).fetchone()
+        found.append((dict(row), hit[0] if hit else None))
+    return found
+
+
 def update_conversation(
     conn: sqlite3.Connection,
     conversation_id: str,

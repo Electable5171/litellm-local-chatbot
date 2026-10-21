@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -40,8 +40,11 @@ def _stream(events) -> StreamingResponse:
 
 
 @router.get("")
-async def list_conversations(request: Request) -> dict[str, Any]:
-    return {"conversations": await _service(request).list()}
+async def list_conversations(
+    request: Request, q: str | None = Query(default=None, max_length=200)
+) -> dict[str, Any]:
+    """All conversations, newest first; with ``q``, only those containing the text."""
+    return {"conversations": await _service(request).list(q)}
 
 
 @router.post("", status_code=201)
@@ -54,6 +57,22 @@ async def create_conversation(body: CreateIn, request: Request) -> dict[str, Any
 @router.get("/{conversation_id}")
 async def get_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
     return await _service(request).get(conversation_id)
+
+
+@router.get("/{conversation_id}/export")
+async def export_conversation(
+    conversation_id: str, request: Request, thinking: bool = False
+) -> Response:
+    """Download the conversation as a Markdown file (add ``?thinking=true`` to include thinking)."""
+    name, text = await _service(request).export_markdown(conversation_id, thinking=thinking)
+    return Response(
+        text,
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.patch("/{conversation_id}")

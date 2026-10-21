@@ -50,6 +50,8 @@ export interface Conversation {
   system_prompt: string
   created_at: string
   updated_at: string
+  /** Only in search results: the text around the match, when it was in a message. */
+  snippet?: string | null
 }
 
 export interface StoredMessage {

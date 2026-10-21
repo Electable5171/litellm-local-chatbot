@@ -6,14 +6,24 @@ import type { Conversation } from '../api/types'
 export function useConversations() {
   const [items, setItems] = useState<Conversation[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  // The search text the list on screen belongs to (it lags behind typing by one request).
+  const [shown, setShown] = useState('')
+  const queryRef = useRef(query)
   const latest = useRef(0)
+
+  useEffect(() => {
+    queryRef.current = query
+  })
 
   const refresh = useCallback(async () => {
     const ticket = ++latest.current
+    const asked = queryRef.current.trim()
     try {
-      const list = await listConversations()
+      const list = await listConversations(asked)
       if (ticket === latest.current) {
         setItems(list)
+        setShown(asked)
         setError(null)
       }
     } catch (e) {
@@ -21,15 +31,11 @@ export function useConversations() {
     }
   }, [])
 
+  // Load the list at start, and search a moment after the last key press.
   useEffect(() => {
-    const controller = new AbortController()
-    listConversations(controller.signal)
-      .then(setItems)
-      .catch((e: unknown) => {
-        if (!controller.signal.aborted) setError(describeError(e).message)
-      })
-    return () => controller.abort()
-  }, [])
+    const timer = setTimeout(() => void refresh(), query.trim() ? 250 : 0)
+    return () => clearTimeout(timer)
+  }, [query, refresh])
 
   const rename = useCallback(
     async (id: string, title: string) => {
@@ -55,5 +61,5 @@ export function useConversations() {
     [refresh],
   )
 
-  return { items, error, refresh, rename, remove }
+  return { items, error, query, shown, setQuery, refresh, rename, remove }
 }

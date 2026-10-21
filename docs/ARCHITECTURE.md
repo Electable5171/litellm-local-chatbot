@@ -106,7 +106,8 @@ litellm-local-chatbot/
 | GET | `/api/health` | Liveness of the app, plus a cached LiteLLM reachability probe (`/v1/models`) |
 | GET | `/api/models` | Proxy of LiteLLM `/v1/models` (filtered to allow-listed models) |
 | POST | `/api/chat` | **Built.** Stateless streaming core: the caller sends the messages, the response is an SSE stream. Used by the command-line chat; the web UI uses the conversation endpoints below, which wrap it and add saving. |
-| GET / POST | `/api/conversations` | List and create conversations |
+| GET / POST | `/api/conversations` | List and create conversations. `GET ?q=text` searches titles and message text (plain `LIKE`, no index: fast enough for one user's history) and adds a `snippet` to each result |
+| GET | `/api/conversations/{id}/export` | **Built.** Download as Markdown (`?thinking=true` adds the thinking) |
 | GET / PATCH / DELETE | `/api/conversations/{id}` | Read with messages, rename, delete |
 | POST | `/api/conversations/{id}/messages` | Send a user message; **the response is an SSE stream** |
 | POST | `/api/conversations/{id}/regenerate` | Re-run the last assistant turn (SSE) |
