@@ -5,9 +5,12 @@ interface Props {
   /** Returns true when the message was accepted. */
   onSend: (text: string) => boolean
   onStop: () => void
+  /** How many documents this chat uses, and the button that opens the document panel. */
+  documentCount: number
+  onDocuments: () => void
 }
 
-export function Composer({ busy, onSend, onStop }: Props) {
+export function Composer({ busy, onSend, onStop, documentCount, onDocuments }: Props) {
   const [text, setText] = useState('')
   const input = useRef<HTMLTextAreaElement>(null)
 
@@ -36,6 +39,9 @@ export function Composer({ busy, onSend, onStop }: Props) {
         submit()
       }}
     >
+      <button type="button" className="ghost docs-button" onClick={onDocuments}>
+        Documents{documentCount > 0 ? ` (${documentCount})` : ''}
+      </button>
       <textarea
         ref={input}
         value={text}

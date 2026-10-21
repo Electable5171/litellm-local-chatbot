@@ -102,6 +102,7 @@ describe('saved messages', () => {
     ttft_ms: 300,
     thinking_ms: 3500,
     trimmed: false,
+    sources: null,
     created_at: '2026-10-21T10:00:00.000Z',
   }
 
