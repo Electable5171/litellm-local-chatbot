@@ -57,9 +57,12 @@ class Database:
         self._migrate()
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        # Wait for a statement that a worker thread is still running (a cancelled request leaves
+        # its thread to finish); closing the connection under it is undefined.
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     # -- use ---------------------------------------------------------------------------------
 
