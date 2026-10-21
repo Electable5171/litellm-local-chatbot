@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     context_budget_tokens: int = 32_768
     max_output_tokens: int = 8_192  # reasoning tokens count towards this
 
+    # Documents (RAG)
+    max_upload_mb: int = Field(default=25, ge=1, le=200)
+    max_pdf_pages: int = Field(default=500, ge=1)
+    max_chunks_per_document: int = Field(default=3000, ge=1)
+    chunk_tokens: int = Field(default=800, ge=100)
+    chunk_overlap_tokens: int = Field(default=100, ge=0)
+    embedding_batch_size: int = Field(default=32, ge=1, le=256)
+
     # HTTP behaviour towards LiteLLM
     connect_timeout_s: float = 10.0
     request_timeout_s: float = 600.0
