@@ -39,6 +39,18 @@ With the app running in one PowerShell window, open a second one:
 
 The thinking is printed live under `[thinking]`, then the answer under `[answer]`, then a line with the token count, total time and time to first token. The model can take several seconds of thinking before the first answer word.
 
+## Documents (in progress)
+
+The backend can read PDF, DOCX, Markdown and text files (up to 25 MB; a PDF up to 500 pages), split them into parts and embed them through LiteLLM (`llama-nemotron-embed-1b-v2`). The web UI for attaching documents to a chat comes next. To check on the laptop that reading and embedding work:
+
+```powershell
+.\scripts\upload-doc.cmd C:\path\to\file.pdf     # uploads and shows progress
+.\scripts\upload-doc.cmd -List
+.\scripts\upload-doc.cmd -Delete <id>
+```
+
+Only the extracted text is stored (in `backend\data\chat.db`, in plain text like the chats), not the original file.
+
 ## Using the company Nexus (when the proxy blocks public PyPI)
 
 If your web proxy refuses package downloads (`403 Unsuitable material` for `files.pythonhosted.org`), install from the company Nexus instead. `run.cmd` then uses `pip` with a hash-pinned list (`backend/requirements.lock.txt`), so every file is verified against the same hashes as the public release.

@@ -111,7 +111,7 @@ litellm-local-chatbot/
 | POST | `/api/conversations/{id}/messages` | Send a user message; **the response is an SSE stream** |
 | POST | `/api/conversations/{id}/regenerate` | Re-run the last assistant turn (SSE) |
 | POST | `/api/messages/{id}/cancel` | Stop generation (also triggered when the client disconnects) |
-| POST / GET / DELETE | `/api/documents` | Upload (multipart), list, delete |
+| POST / GET / DELETE | `/api/documents` | **Built.** Upload (the request body is the file, `X-Filename` header, `application/octet-stream` only), list with embedding progress, delete. The same file uploaded twice is stored once. |
 | POST / DELETE | `/api/conversations/{id}/documents/{doc_id}` | Attach a document to a chat or detach it |
 
 **SSE event types** (one JSON payload per event):
@@ -143,7 +143,7 @@ erDiagram
 
 - `messages.status` takes `complete | streaming | cancelled | error`. A crash or disconnect in the middle of a stream never leaves an orphaned or invisible message. You see a partial answer marked *incomplete*.
 - `messages.reasoning` is stored separately from `content`. It is shown in the UI but **not sent back** to the model in later turns, as Qwen recommends for multi-turn chat. This also saves context.
-- Vectors live in a `sqlite-vec` virtual table `chunk_vectors(chunk_id, embedding float[N])`. Its dimension `N` is fixed by the embedding model. If you change embedding models, all documents must be re-embedded. This is recorded in a `meta` table so the app can detect the mismatch and refuse to mix dimensions.
+- Vectors are stored as packed float32 BLOBs in `chunks.embedding` and compared in plain Python (the documents are small: a few thousand chunks search in well under a second), so there is no `sqlite-vec` extension and no numeric library to install. Each document records its `embedding_model` and `embedding_dim`; if the model changes, the app detects the mismatch and refuses to mix dimensions.
 - IDs are ULIDs, so they sort by time and are safe to show in URLs.
 
 ## 7. Core flows
@@ -194,10 +194,10 @@ Request contents are added in priority order: system prompt → RAG context (cap
 
 - **Ingest** (runs as a background task after upload, and the UI shows a status):
   1. sha256 dedupe.
-  2. Extract text: PDF with `pymupdf`, DOCX with `python-docx`, plus `txt` and `md`. Scanned PDFs without OCR fail clearly instead of being silently empty.
+  2. Extract text: PDF with `pypdf`, DOCX with the standard library (zip + XML), plus `txt` and `md`. Scanned PDFs without OCR fail clearly instead of being silently empty. (`pymupdf` was dropped: it is AGPL-licensed, which is a problem inside a company, and all chosen libraries are pure Python, so they install from Nexus without a compiler.)
   3. Chunk at about 800 tokens with 100 tokens of overlap, keeping page numbers.
   4. Embed through LiteLLM in batches of up to 32 chunks (`input_type: "passage"`), one batch at a time.
-  5. Store.
+  5. Store. Chunks are saved first, so a failed or interrupted embedding run resumes with the chunks that still have no vector (also after an app restart). The original file is not kept, only the extracted text.
 - **Scope:** documents are attached **per conversation**. This is more predictable than "search everything", and it is the way ChatGPT and Claude projects behave.
 - **Small-document shortcut:** if all attached text fits within the RAG budget, include it verbatim and skip retrieval. This is both higher quality and simpler.
 - **Retrieve:** embed the query (`input_type: "query"`), take the top-k (k=6) by cosine similarity, and prepend the chunks with `[source: filename p.N]` labels. The model is instructed to cite them, and the UI shows sources under the answer.
