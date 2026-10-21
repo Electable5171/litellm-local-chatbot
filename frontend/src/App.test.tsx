@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import type { ConversationWithMessages, DocumentInfo, Health, ModelsResponse, StoredMessage } from './api/types'
@@ -838,5 +838,27 @@ describe('search and export', () => {
     const link = await screen.findByRole('link', { name: 'Export' })
     expect(link).toHaveAttribute('href', '/api/conversations/c1/export')
     expect(link).toHaveAttribute('download')
+  })
+})
+
+describe('chat titles', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('picks up the title the model writes a few seconds after the first answer', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const server = mockServer(() => fullResponse(frame('content', { delta: 'Paris.' }), DONE))
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    render(<App />)
+    await user.type(box(), 'What is the capital of France?{Enter}')
+    const nav = screen.getByRole('navigation', { name: 'Conversations' })
+    expect(await within(nav).findByText('What is the capital of France?')).toBeInTheDocument() // draft
+
+    server.db.get('new1')!.title = 'Capital of France' // the backend wrote it meanwhile
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3100)
+    })
+    expect(await within(nav).findByText('Capital of France')).toBeInTheDocument()
   })
 })

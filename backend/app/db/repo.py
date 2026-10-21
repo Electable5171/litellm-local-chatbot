@@ -110,11 +110,13 @@ def update_conversation(
     thinking: bool | None = None,
     system_prompt: str | None = None,
     touch: bool = False,
+    title_source: str = "user",
 ) -> Row | None:
     """Change settings. Renaming does not move a chat to the top of the list; ``touch`` does."""
     fields: list[tuple[str, Any]] = []
     if title is not None:
         fields.append(("title", title))
+        fields.append(("title_source", title_source))
     if model is not None:
         fields.append(("model", model))
     if thinking is not None:
@@ -130,6 +132,16 @@ def update_conversation(
             [*(value for _, value in fields), conversation_id],
         )
     return get_conversation(conn, conversation_id)
+
+
+def set_generated_title(conn: sqlite3.Connection, conversation_id: str, title: str) -> bool:
+    """Replace a draft title; false (nothing changed) if the user renamed the chat meanwhile."""
+    cursor = conn.execute(
+        "UPDATE conversations SET title = ?, title_source = 'llm'"
+        " WHERE id = ? AND title_source = 'draft'",
+        (title, conversation_id),
+    )
+    return cursor.rowcount > 0
 
 
 def delete_conversation(conn: sqlite3.Connection, conversation_id: str) -> bool:

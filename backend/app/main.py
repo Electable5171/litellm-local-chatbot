@@ -46,6 +46,7 @@ def create_app(settings: Settings | None = None, llm: LLMClient | None = None) -
         try:
             yield
         finally:
+            await app.state.conversations.shutdown()
             await app.state.documents.shutdown()
             await app.state.llm.aclose()
             db.close()

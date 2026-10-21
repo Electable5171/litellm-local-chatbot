@@ -12,6 +12,7 @@ A turn is stored in this order, so a failure never leaves a half-saved exchange:
 An assistant message still marked ``streaming`` after a restart is turned into an error at startup.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -37,6 +38,27 @@ MAX_MESSAGE_CHARS = 200_000
 
 # A module-level alias: inside the class, the name ``list`` is the method ``list()`` below.
 DocumentList = list[dict[str, Any]]
+
+
+TITLE_PROMPT = (
+    "You write short titles for chat conversations. Reply with the title only: at most 6 words, "
+    "no quotes, no trailing punctuation, in the same language as the user's message."
+)
+
+
+def clean_title(raw: str) -> str | None:
+    """A usable title from the model's reply, or None."""
+    lines = [ln.strip() for ln in raw.strip().splitlines() if ln.strip()]
+    if not lines:
+        return None
+    title = lines[0]
+    if title.lower().startswith("title:"):
+        title = title[6:]
+    title = title.strip(" \t\"'`*#.:;\u201c\u201d\u2018\u2019")
+    title = " ".join(title.split())
+    if not title or len(title) > 80:
+        return None
+    return title[:TITLE_MAX]
 
 
 def make_title(text: str) -> str:
@@ -133,6 +155,8 @@ class ConversationService:
         self._chat = chat
         self._settings = settings
         self._active: set[str] = set()  # assistant messages being written by this process
+        self._title_tasks: set[asyncio.Task[None]] = set()
+        self._title_gate = asyncio.Semaphore(1)
 
     # -- plain CRUD --------------------------------------------------------------------------
 
@@ -140,6 +164,16 @@ class ConversationService:
         count = await self._db.run(repo.mark_interrupted)
         if count:
             log.warning("marked %d unfinished answer(s) as interrupted", count)
+
+    async def shutdown(self) -> None:
+        for task in list(self._title_tasks):
+            task.cancel()
+        await asyncio.gather(*self._title_tasks, return_exceptions=True)
+
+    async def wait_idle(self) -> None:
+        """Wait for background title writing to finish (used by tests)."""
+        while self._title_tasks:
+            await asyncio.gather(*list(self._title_tasks), return_exceptions=True)
 
     async def list(self, query: str | None = None) -> list[dict[str, Any]]:
         term = (query or "").strip()
@@ -348,8 +382,16 @@ class ConversationService:
                 reply = repo.add_message(conn, conversation_id, "assistant", status="streaming")
                 if sources is not None:
                     repo.update_message(conn, reply["id"], sources=json.dumps(sources))
-                title = conv["title"] or make_title(user_row["content"])
-                repo.update_conversation(conn, conversation_id, title=title, touch=True)
+                if conv["title"]:
+                    repo.update_conversation(conn, conversation_id, touch=True)
+                else:  # a draft title; the model may write a better one after the first answer
+                    repo.update_conversation(
+                        conn,
+                        conversation_id,
+                        title=make_title(user_row["content"]),
+                        title_source="draft",
+                        touch=True,
+                    )
                 return user_row, reply
 
         try:
@@ -363,11 +405,13 @@ class ConversationService:
             "user_message_id": user_row["id"],
             "message_id": reply["id"],
         }
-        events = self._persisted(self._chat.events(prepared, stream), reply["id"], prepared.trimmed)
+        events = self._persisted(
+            self._chat.events(prepared, stream), reply["id"], prepared.trimmed, conversation_id
+        )
         return meta, _with_meta(events, meta, sources)
 
     async def _persisted(
-        self, events: AsyncIterator[Event], message_id: str, trimmed: int
+        self, events: AsyncIterator[Event], message_id: str, trimmed: int, conversation_id: str
     ) -> AsyncIterator[Event]:
         content: list[str] = []
         reasoning: list[str] = []
@@ -433,6 +477,56 @@ class ConversationService:
                     log.exception("could not save the answer %s", message_id)
                 finally:
                     self._active.discard(message_id)
+            if status == "complete" and self._settings.auto_titles:
+                self._schedule_title(conversation_id)
+
+    # -- titles ------------------------------------------------------------------------------
+
+    def _schedule_title(self, conversation_id: str) -> None:
+        task = asyncio.create_task(self._write_title(conversation_id))
+        self._title_tasks.add(task)
+        task.add_done_callback(self._title_tasks.discard)
+
+    async def _write_title(self, conversation_id: str) -> None:
+        """Ask the model for a short title. Never competes with a chat; failure keeps the draft."""
+        try:
+            async with self._title_gate:
+                if self._active:  # the model is shared: wait for the next answer instead
+                    return
+
+                def load(conn):
+                    conv = repo.get_conversation(conn, conversation_id)
+                    if conv is None or conv["title_source"] != "draft":
+                        return None
+                    msgs = repo.list_messages(conn, conversation_id)
+                    first = next((m for m in msgs if m["role"] == "user"), None)
+                    reply = next(
+                        (m for m in msgs if m["role"] == "assistant" and m["status"] == "complete"),
+                        None,
+                    )
+                    return (conv["model"], first, reply) if first and reply else None
+
+                found = await self._db.run(load)
+                if found is None:
+                    return
+                model, first, reply = found
+                prompt = [
+                    {"role": "system", "content": TITLE_PROMPT},
+                    {
+                        "role": "user",
+                        "content": f"User message:\n{first['content'][:800]}\n\n"
+                        f"Assistant reply:\n{reply['content'][:400]}\n\nTitle:",
+                    },
+                ]
+                title = clean_title(await self._chat.complete(model, prompt, max_tokens=40))
+                if title:
+                    await self._db.run(
+                        lambda c: repo.set_generated_title(c, conversation_id, title)
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.info("no generated title for %s: %s", conversation_id, type(exc).__name__)
 
 
 async def _with_meta(

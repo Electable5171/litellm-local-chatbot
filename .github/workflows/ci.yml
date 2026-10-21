@@ -12,6 +12,7 @@ jobs:
   backend:
     name: backend (${{ matrix.os }}, python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -40,6 +41,7 @@ jobs:
   frontend:
     name: frontend (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:

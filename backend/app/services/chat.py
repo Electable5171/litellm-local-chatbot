@@ -92,6 +92,20 @@ class ChatService:
         messages, trimmed = fit_to_budget(request.messages, budget, self._counter)
         return Prepared(model, messages, request.thinking, max_tokens, trimmed)
 
+    async def complete(self, model: str, messages: list[dict[str, str]], max_tokens: int) -> str:
+        """One short, non-streaming answer with thinking off (used for chat titles)."""
+        try:
+            response = await self._llm.client.chat.completions.create(
+                model=model,
+                messages=messages,  # type: ignore[arg-type]
+                max_tokens=max_tokens,
+                temperature=0.3,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            )
+        except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
+            raise _map_error(exc) from exc
+        return (response.choices[0].message.content or "") if response.choices else ""
+
     async def open_stream(self, prepared: Prepared) -> AsyncStream[ChatCompletionChunk]:
         """Start the request. Failures are raised so the caller can send a real HTTP status."""
         extra_body = (

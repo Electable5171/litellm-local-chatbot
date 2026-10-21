@@ -40,4 +40,6 @@ ignore = ["S101"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# A test stuck for two minutes dumps every thread's stack into the log (CI also has a job timeout).
+faulthandler_timeout = 120
 testpaths = ["tests"]
