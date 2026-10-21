@@ -29,7 +29,7 @@ flowchart LR
             CS["Chat service<br/>(history, token budget,<br/>thinking parser)"]
             RAG["RAG service<br/>(extract → chunk → embed → retrieve)"]
             LC["LiteLLM client<br/>(httpx / openai SDK)"]
-            EMB["Local embedder<br/>fastembed (ONNX, CPU)<br/>bge-small-en-v1.5"]
+            EMB["Embedder (interface)<br/>LiteLLM llama-nemotron-embed-1b-v2<br/>or local fastembed fallback"]
         end
         DB[("SQLite (WAL)<br/>conversations, messages,<br/>documents, chunks<br/>+ sqlite-vec index")]
         FS[["data/uploads/<br/>original files"]]
@@ -49,7 +49,7 @@ flowchart LR
     LL --> M
 ```
 
-**Embeddings run locally.** LiteLLM has no embedding model today, so documents are embedded on the laptop CPU with `fastembed`. It uses ONNX Runtime, with no torch and no GPU, and the model is about 130 MB. Embedding sits behind an `Embedder` interface. If an embedding model is later added to LiteLLM, switching to it is a config change (`EMBEDDING_PROVIDER=litellm`) plus a one-time re-index.
+**Embeddings.** The first reports showed no embedding model in LiteLLM, but the third report lists `llama-nemotron-embed-1b-v2` for this key. If its test (Test 8 in `scripts/check-env.ps1`) passes, documents are embedded through LiteLLM: nothing to download, no CPU load on the laptop, better quality than a small local model. The `Embedder` interface keeps a local `fastembed` implementation as the fallback (`EMBEDDING_PROVIDER=litellm` or `local`). Switching providers needs a one-time re-index, because the vector sizes differ.
 
 **Why there is a backend at all:** the browser could call LiteLLM directly, but then the API key sits in the browser, CORS has to be opened on LiteLLM, and there is nowhere to persist history or run RAG. The backend is a thin, trusted layer that owns the key, the database, and the prompt assembly.
 
@@ -68,7 +68,7 @@ flowchart LR
 | 7 | LLM client | `openai` Python SDK pointed at LiteLLM `base_url` | Raw httpx, LangChain | LiteLLM is OpenAI-compatible. The SDK handles streaming, retries, and timeouts, and it keeps dependencies lean. No LangChain: it adds too much abstraction for what we need. |
 | 8 | Packaging on the laptop | Native Windows, no admin rights. `uv` is installed per user and it installs and pins its own Python. Node 22 is available on the laptop, so the frontend can be built there; CI builds and tests it too. | Docker Desktop | Docker Desktop on Windows needs WSL2 or Hyper-V, membership of `docker-users` (granted by an admin), and a paid licence in larger companies. None of that can be fixed without admin rights. Docker Compose stays optional if `check-env.ps1` shows it works. |
 | 9 | Python tooling | `uv`, `ruff`, `pytest`; frontend: `npm`, `eslint`, `vitest` | pip/poetry | Fast, reproducible lockfiles (`uv.lock`, `package-lock.json`). `uv` needs no admin rights. |
-| 10 | Embeddings | Local `fastembed` (`BAAI/bge-small-en-v1.5`, 384 dimensions), behind an `Embedder` interface | `sentence-transformers` (torch, 2 GB+); a LiteLLM embedding model (none exists today) | Small, CPU-only, has Windows wheels. The model download happens once into `data/models/`. If the corporate network blocks huggingface.co, the model can be copied in manually. |
+| 10 | Embeddings | `llama-nemotron-embed-1b-v2` through LiteLLM (pending Test 8), behind an `Embedder` interface, with local `fastembed` (`BAAI/bge-small-en-v1.5`, 384 dimensions) as the fallback | `sentence-transformers` (torch, 2 GB+); local only | On-prem, nothing to install, no model download through the proxy. Risk: the model list for this key changed between runs, so the app must check at startup that the embedding model still exists, and store the model name and vector size with every index. |
 
 ## 4. Repository layout
 
@@ -235,7 +235,7 @@ Request contents are added in priority order: system prompt → RAG context (cap
 |----------|--------|---------------|
 | LiteLLM endpoint | `http://172.17.58.139:4000/v1`, reachable directly, no TLS | Plain HTTP client; proxy bypass; see the security notes in §8 |
 | Auth | A dedicated virtual key is available | Request one with a budget and an RPM limit |
-| Embeddings | None in LiteLLM | Local `fastembed` (ADR 10) |
+| Embeddings | Not available in the first two reports; `llama-nemotron-embed-1b-v2` appears in the third | Prefer LiteLLM embeddings if Test 8 passes (vector size, `input_type`, batching, input limit). Local `fastembed` stays as the fallback (ADR 10). |
 | Laptop | Windows, no admin rights | `uv` installed per user; Node not needed on the laptop (CI builds the frontend); PowerShell run scripts (ADR 8) |
 | Data sensitivity | OK, because the model and LiteLLM are both on-prem | No extra redaction layer |
 | Model id | `qwen3.8` | `CHAT_MODEL` default. The key also sees `nemotron-nano`, `gpt-oss`, `foundation-sec`, `nuextract` and `jina-ocr`; none is an embedding model. The model picker is an allow-list in config, starting with `qwen3.8` only. |
@@ -246,14 +246,14 @@ Request contents are added in priority order: system prompt → RAG context (cap
 | Corporate proxy | A cloud web proxy is set in Windows (not in environment variables). PyPI, npm, GitHub, Hugging Face and nodejs.org are reachable. | The LiteLLM client must ignore the system proxy (`httpx` reads the Windows proxy setting via `urllib`, so it needs `trust_env=False` for LiteLLM). Package and model downloads still use the proxy. |
 | Node on the laptop | Node v22.14.0 and npm 10.9.2 work (the first report's failure was not reproduced), and the npm registry is reachable through the proxy. | The frontend can be built on the laptop with `npm ci && npm run build`. CI still builds and tests it, but the laptop no longer depends on downloading CI artifacts. |
 | Git on the laptop | Git 2.32.0 works, but `C:\Program Files\Git\cmd` is not on PATH (it runs from Git Bash and VS Code). | Optional: add that folder to the user PATH. |
-| Model load and rate limits | Second run: 8.1 s for a 42-token answer and 3.8 s for 4 tokens (the first run took about 0.1 s each). A third call then got HTTP 429, and LiteLLM answered every call after it with `No deployments available for selected model, Try again in 5 seconds` (the deployment was in cooldown). | The model is shared and sometimes slow or overloaded. The app must treat 429/503 as normal: retry with backoff, show "model busy, retrying", and never fire parallel requests (for example title generation) at the same time as a chat. |
+| Streaming and thinking (third run) | Streaming works: reasoning arrives token by token as `delta.reasoning_content`, then the answer as `delta.content`. A 250-word answer took 9.5 s end to end: about 1,300 reasoning tokens (7.7 s) before the first answer token, 1,450 completion tokens in total, so roughly 150 tokens/s. With thinking off, the first answer token took 0.3 s. | The UI must show the reasoning live ("Thinking…", collapsible) because the answer can start 8 s or more later. Thinking is a per-conversation toggle; title generation always runs with thinking off. Request `stream_options: {include_usage: true}` to get token counts. |
+| Model load and rate limits | The second run was slow and then hit HTTP 429 (LiteLLM cooldown). The third run, with 3 s gaps between calls, had no 429. | The model is shared and sometimes slow or overloaded. The app must treat 429/503 as normal: retry with backoff, show "model busy, retrying", and never fire parallel requests (for example title generation) at the same time as a chat. |
 | Network location | The system proxy was a cloud proxy in the first run and `172.17.61.19:8080` in the second. | Proxy settings depend on where the laptop is, so the app never hard-codes one. LiteLLM calls bypass it. |
-| Git from the laptop | Pulling from GitHub works (authenticated, HTTP 200). Pushing fails with HTTP 403 whose response carries only the company proxy's `Via:` header and none of GitHub's own headers (`Server: GitHub-Babel`, `X-GitHub-Request-Id`), so the proxy, not GitHub, is refusing the upload. | The laptop is **pull-only**: all development and pushes happen from the cloud session, and the laptop runs `git pull` / `git checkout <tag>`. Do not try to bypass the proxy. Release tags are created on GitHub (release page or API), not pushed from the laptop. If IT allows pushes later, nothing in the design changes. |
+| Git from the laptop | Pulls always worked. Pushes were refused twice with HTTP 403 whose response carried only the company proxy's `Via:` header (no GitHub headers), then a later push worked (commit `2223203`). | Pushing is intermittent and depends on the proxy, so **do not depend on it**: develop and push from the cloud session, and use the laptop for `git pull` / `git checkout <tag>`. Do not try to bypass the proxy. Release tags are created on GitHub for the commit you confirmed is running. |
 
-**Still open** (a third run of `scripts/check-env.ps1` answers these; the script now waits between calls and retries on 429):
-1. **Does streaming really stream reasoning?** In the first run the only streamed answer (`17*23`) arrived as one content chunk with no reasoning chunks, even though usage shows 42 completion tokens. In the second run all streaming tests were refused with 429 (see above), so test 6 (a longer answer) still has not run.
-2. **Context length.** `/model/info` and `/model_group/info` are forbidden for this key. Test 7 asks for an impossible `max_tokens`, and the server's error normally states the limit, but it was also refused with 429 in the second run. Otherwise `MAX_CONTEXT_TOKENS` must be set by hand from whoever runs vLLM.
-3. **Why the first run's 0.1 s answers?** Possibly a LiteLLM cache hit or a different backend state. It matters only for judging real speed, which test 6 will show.
+**Still open** (a fourth, short run answers these: `check-env.ps1 -LiteLLMOnly`):
+1. **Context length.** `/model/info` and `/model_group/info` are forbidden for this key. Test 7 got HTTP 400 but its message was lost: PowerShell 5.1 keeps the HTTP error body in `ErrorDetails.Message`, which the script now reads. vLLM's 400 normally states the maximum context length. Otherwise `MAX_CONTEXT_TOKENS` must be set by hand from whoever runs vLLM.
+2. **Embeddings.** Test 8 checks `llama-nemotron-embed-1b-v2` through LiteLLM: vector size, whether `input_type` (query/passage) is needed, batching, long inputs, and a relevance sanity check.
 
 ```powershell
 $env:LITELLM_API_KEY = "sk-..."

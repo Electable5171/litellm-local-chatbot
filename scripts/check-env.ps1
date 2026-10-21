@@ -30,7 +30,8 @@ param(
     [string]$Model = "qwen3.8",
     [string]$OutFile = "",
     [switch]$DockerRunTest,
-    [switch]$IncludeExtraBodyTest
+    [switch]$IncludeExtraBodyTest,
+    [switch]$LiteLLMOnly
 )
 
 $ErrorActionPreference = "Continue"
@@ -71,20 +72,25 @@ function Trunc([string]$Text, [int]$Max = 1200) {
 
 function Get-ErrorDetail($ErrorRecord) {
     $msg = $ErrorRecord.Exception.Message
+    $body = ""
+    # PowerShell 5.1 stores the HTTP error body here; the response stream is already consumed
+    try { if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) { $body = $ErrorRecord.ErrorDetails.Message } } catch { }
+    $hdrText = ""
     try {
         $resp = $ErrorRecord.Exception.Response
         if ($resp) {
-            $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
-            $body = $reader.ReadToEnd()
+            if (-not $body) {
+                try { $body = (New-Object System.IO.StreamReader($resp.GetResponseStream())).ReadToEnd() } catch { }
+            }
             $hdrs = @()
             foreach ($k in $resp.Headers.AllKeys) {
                 if ($k -match "^(retry-after|x-ratelimit|x-litellm|llm_provider)") { $hdrs += "$k=$($resp.Headers[$k])" }
             }
-            $hdrText = if ($hdrs.Count -gt 0) { " | headers: " + ($hdrs -join "; ") } else { "" }
-            return "$msg | HTTP body: $(Trunc $body 600)$hdrText"
+            if ($hdrs.Count -gt 0) { $hdrText = " | headers: " + ($hdrs -join "; ") }
         }
     } catch { }
-    return $msg
+    if ($body) { return "$msg | HTTP body: $(Trunc $body 800)$hdrText" }
+    return "$msg$hdrText"
 }
 
 # Runs an external command and keeps the detail when it fails (exit code, output, or the exception text)
@@ -262,6 +268,8 @@ try {
     Emit "generated: $((Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz'))"
     Emit "script params: BaseUrl=$BaseUrl Model=$Model DockerRunTest=$($DockerRunTest.IsPresent)"
 
+    if (-not $LiteLLMOnly) {
+
     # -----------------------------------------------------------------------
     Section "System"
     $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
@@ -367,6 +375,8 @@ try {
         }
     }
 
+    }  # end of the non-LiteLLM sections (skipped with -LiteLLMOnly)
+
     # -----------------------------------------------------------------------
     Section "LiteLLM at $BaseUrl"
     # LiteLLM is on the internal network: do not send these calls through a corporate proxy
@@ -400,7 +410,7 @@ try {
         $modelIds | ForEach-Object { Info "  - $_" }
         if ($modelIds -notcontains $Model) { Warn "Model '$Model' is not in that list; rerun with -Model <one of the ids above>" }
         $embedLike = @($modelIds | Where-Object { $_ -match "(?i)embed|bge|e5-|gte|minilm" })
-        if ($embedLike.Count -gt 0) { Ok "Possible embedding models: $($embedLike -join ', ')" } else { Info "No embedding-looking model ids in the list (local embeddings plan stays)" }
+        if ($embedLike.Count -gt 0) { $script:EmbedModel = $embedLike[0]; Ok "Possible embedding models: $($embedLike -join ', ')" } else { Info "No embedding-looking model ids in the list (local embeddings plan stays)" }
     } catch { Bad "GET /models failed: $(Get-ErrorDetail $_)" }
 
     # Context length: try the info endpoints; each may be blocked for a non-admin key
@@ -473,6 +483,57 @@ try {
         $detail = Get-ErrorDetail $_
         Info "Server answer: $(Trunc $detail 700)"
         if ($detail -match "(\d{4,7})\s*tokens") { Ok "Context length hint found in the error: $($Matches[1]) tokens (check the sentence above)" }
+    }
+
+    Info ""
+    Info "--- Test 8: embeddings through LiteLLM (decides local vs LiteLLM embeddings for document chat) ---"
+    if (-not $script:EmbedModel) {
+        Info "No embedding model in the model list; skipped."
+    } else {
+        $em = $script:EmbedModel
+        function Get-Cosine($a, $b) {
+            $dot = 0.0; $na = 0.0; $nb = 0.0
+            for ($i = 0; $i -lt $a.Count; $i++) { $dot += $a[$i] * $b[$i]; $na += $a[$i] * $a[$i]; $nb += $b[$i] * $b[$i] }
+            return $dot / ([math]::Sqrt($na) * [math]::Sqrt($nb))
+        }
+        # 8a: plain request
+        try {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $e1 = Invoke-LLM "/embeddings" @{ model = $em; input = @("hello world") } 60
+            Ok ("8a plain request ({0}): {1:N1}s, vector length={2}, prompt_tokens={3}" -f $em, $sw.Elapsed.TotalSeconds, $e1.data[0].embedding.Count, $e1.usage.prompt_tokens)
+        } catch { Warn "8a plain request failed: $(Get-ErrorDetail $_)" }
+
+        # 8b: NVIDIA retrieval models usually want input_type = query | passage
+        $q1 = $null; $p1 = $null; $p2 = $null
+        try {
+            $q1 = (Invoke-LLM "/embeddings" @{ model = $em; input = @("What is the capital of France?"); input_type = "query" } 60).data[0].embedding
+            $p1 = (Invoke-LLM "/embeddings" @{ model = $em; input = @("Paris is the capital and largest city of France."); input_type = "passage" } 60).data[0].embedding
+            $p2 = (Invoke-LLM "/embeddings" @{ model = $em; input = @("Bananas are rich in potassium and grow in tropical climates."); input_type = "passage" } 60).data[0].embedding
+            Ok ("8b input_type=query/passage accepted. cosine(query, relevant)={0:N3}, cosine(query, unrelated)={1:N3}" -f (Get-Cosine $q1 $p1), (Get-Cosine $q1 $p2))
+        } catch {
+            Warn "8b input_type request failed: $(Get-ErrorDetail $_)"
+            try {
+                $q1 = (Invoke-LLM "/embeddings" @{ model = $em; input = @("What is the capital of France?") } 60).data[0].embedding
+                $p1 = (Invoke-LLM "/embeddings" @{ model = $em; input = @("Paris is the capital and largest city of France.") } 60).data[0].embedding
+                $p2 = (Invoke-LLM "/embeddings" @{ model = $em; input = @("Bananas are rich in potassium and grow in tropical climates.") } 60).data[0].embedding
+                Info ("8b fallback without input_type: cosine(query, relevant)={0:N3}, cosine(query, unrelated)={1:N3}" -f (Get-Cosine $q1 $p1), (Get-Cosine $q1 $p2))
+            } catch { Warn "8b fallback failed too: $(Get-ErrorDetail $_)" }
+        }
+
+        # 8c: batch of 32 short texts (how the app would embed document chunks)
+        try {
+            $batch = @(1..32 | ForEach-Object { "This is test sentence number $_ about database indexes and query planning." })
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $e3 = Invoke-LLM "/embeddings" @{ model = $em; input = $batch; input_type = "passage" } 120
+            Ok ("8c batch of 32: {0:N1}s, vectors returned={1}" -f $sw.Elapsed.TotalSeconds, $e3.data.Count)
+        } catch { Warn "8c batch of 32 failed: $(Get-ErrorDetail $_)" }
+
+        # 8d: one long input (about 6000 characters, roughly 1500 tokens) to see the input limit behaviour
+        try {
+            $longText = ("Indexes speed up lookups by keeping keys sorted. " * 125)
+            $e4 = Invoke-LLM "/embeddings" @{ model = $em; input = @($longText); input_type = "passage" } 120
+            Ok ("8d long input ({0} chars): ok, prompt_tokens={1}" -f $longText.Length, $e4.usage.prompt_tokens)
+        } catch { Warn "8d long input failed: $(Get-ErrorDetail $_)" }
     }
 
     # -----------------------------------------------------------------------

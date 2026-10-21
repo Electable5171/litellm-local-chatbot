@@ -34,3 +34,5 @@ git push -u origin fix/env-report
 ```
 
 If the push fails with `HTTP 403` and the response has only your company proxy's `Via:` header, the proxy is blocking uploads to GitHub. Do not work around it: ask IT, and share the report text another way.
+
+Pushes from the office laptop have sometimes worked and sometimes been refused by the proxy, so don't rely on them. Pulling always works. Don't add stray files (for example `*.stackdump`) to the report branch, and don't merge the report branch into `main`.
