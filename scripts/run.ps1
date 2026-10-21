@@ -48,7 +48,16 @@ try {
 
         Write-Host "Installing dependencies (uv sync --locked) ..."
         & uv sync --locked
-        if ($LASTEXITCODE -ne 0) { throw "uv sync failed (exit code $LASTEXITCODE). If you are offline, use -SkipSync." }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "Dependency install failed (uv exit code $LASTEXITCODE)." -ForegroundColor Red
+            Write-Host "  - 403 / 'Unsuitable material' for files.pythonhosted.org: your web proxy blocks package downloads." -ForegroundColor Yellow
+            Write-Host "    This is a company policy; do not work around it. Ask IT to allow pypi.org and files.pythonhosted.org," -ForegroundColor Yellow
+            Write-Host "    or to give you an internal package index. Try again on the office network, whose proxy may differ." -ForegroundColor Yellow
+            Write-Host "  - Certificate errors: your company proxy re-signs HTTPS; tell me the exact message." -ForegroundColor Yellow
+            Write-Host "  - Offline, with dependencies already installed: run  .\scripts\run.cmd -SkipSync" -ForegroundColor Yellow
+            throw "uv sync failed (exit code $LASTEXITCODE)."
+        }
     }
 
     if (-not (Test-Path (Join-Path $repo "frontend\dist"))) {
