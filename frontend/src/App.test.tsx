@@ -1,17 +1,26 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
-import type { ConversationWithMessages, Health, ModelsResponse, StoredMessage } from './api/types'
+import type { ConversationWithMessages, DocumentInfo, Health, ModelsResponse, StoredMessage } from './api/types'
 
 const encoder = new TextEncoder()
 
 const HEALTH: Health = {
   status: 'ok',
   version: '0.1.0',
-  litellm: { base_url: 'http://x/v1', reachable: true, latency_ms: 120, error: null, checked_age_s: 0 },
+  litellm: {
+    base_url: 'http://x/v1',
+    reachable: true,
+    latency_ms: 120,
+    error: null,
+    checked_age_s: 0,
+  },
   chat_model: { id: 'qwen3.8', available: true },
 }
-const MODELS: ModelsResponse = { default: 'qwen3.8', models: [{ id: 'qwen3.8', available: true }] }
+const MODELS: ModelsResponse = {
+  default: 'qwen3.8',
+  models: [{ id: 'qwen3.8', available: true }],
+}
 
 const frame = (event: string, data: object) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 const DONE = frame('done', {
@@ -20,7 +29,11 @@ const DONE = frame('done', {
   latency_ms: 9000,
   ttft_ms: 300,
 })
-const META = frame('meta', { model: 'qwen3.8', thinking: true, trimmed_messages: 0 })
+const META = frame('meta', {
+  model: 'qwen3.8',
+  thinking: true,
+  trimmed_messages: 0,
+})
 
 /** A chat response the test can feed piece by piece, like the real server does. */
 function liveStream(signal?: AbortSignal | null) {
@@ -32,14 +45,18 @@ function liveStream(signal?: AbortSignal | null) {
     },
   })
   return {
-    response: new Response(body, { headers: { 'content-type': 'text/event-stream' } }),
+    response: new Response(body, {
+      headers: { 'content-type': 'text/event-stream' },
+    }),
     push: (text: string) => controller.enqueue(encoder.encode(text)),
     close: () => controller.close(),
   }
 }
 
 function fullResponse(...frames: string[]): Response {
-  return new Response(frames.join(''), { headers: { 'content-type': 'text/event-stream' } })
+  return new Response(frames.join(''), {
+    headers: { 'content-type': 'text/event-stream' },
+  })
 }
 
 const stamp = (daysAgo = 0) => new Date(Date.now() - daysAgo * 86_400_000).toISOString()
@@ -72,6 +89,7 @@ function stored(role: 'user' | 'assistant', content: string, extra: Partial<Stor
     ttft_ms: null,
     thinking_ms: null,
     trimmed: false,
+    sources: null,
     created_at: stamp(),
     ...extra,
   }
@@ -85,12 +103,34 @@ interface Turn {
 }
 type TurnHandler = (turn: Turn) => Response | Promise<Response>
 
+function documentInfo(id: string, filename: string, extra: Partial<DocumentInfo> = {}): DocumentInfo {
+  return {
+    id,
+    filename,
+    mime: 'application/pdf',
+    size_bytes: 2048,
+    status: 'ready',
+    error: null,
+    page_count: 3,
+    chunk_count: 7,
+    embedded_count: 7,
+    created_at: stamp(),
+    ...extra,
+  }
+}
+
 /** A small stand-in for the backend: conversations live in memory for the length of a test. */
 function mockServer(
   turn: TurnHandler = () => fullResponse(DONE),
-  options: { health?: Health; conversations?: ConversationWithMessages[] } = {},
+  options: {
+    health?: Health
+    conversations?: ConversationWithMessages[]
+    documents?: DocumentInfo[]
+  } = {},
 ) {
   const db = new Map((options.conversations ?? []).map((c) => [c.id, c]))
+  const docs = new Map((options.documents ?? []).map((d) => [d.id, d]))
+  const attached = new Map<string, string[]>()
   let created = 0
   const calls: { method: string; url: string; body?: unknown }[] = []
   const mock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -103,11 +143,57 @@ function mockServer(
     if (url === '/api/conversations') {
       if (method === 'POST') {
         created += 1
-        const made = conversation(`new${created}`, '', { thinking: body?.thinking !== false })
+        const made = conversation(`new${created}`, '', {
+          thinking: body?.thinking !== false,
+        })
         db.set(made.id, made)
         return Response.json(made, { status: 201 })
       }
-      return Response.json({ conversations: [...db.values()].map((c) => ({ ...c, messages: undefined })) })
+      return Response.json({
+        conversations: [...db.values()].map((c) => ({
+          ...c,
+          messages: undefined,
+        })),
+      })
+    }
+    if (url === '/api/documents') {
+      if (method === 'POST') {
+        const file = init.body as File
+        if (file.name === 'bad.xlsx') {
+          return Response.json(
+            {
+              error: {
+                code: 'unsupported_file',
+                message: "'bad.xlsx' is not a supported file type.",
+              },
+            },
+            { status: 415 },
+          )
+        }
+        const made = documentInfo(
+          `d${docs.size + 1}`,
+          decodeURIComponent((init.headers as Record<string, string>)['x-filename']!),
+        )
+        docs.set(made.id, made)
+        return Response.json(made, { status: 201 })
+      }
+      return Response.json({ documents: [...docs.values()] })
+    }
+    const docMatch = /^\/api\/documents\/([^/]+)$/.exec(url)
+    if (docMatch && method === 'DELETE') {
+      docs.delete(docMatch[1]!)
+      return new Response(null, { status: 204 })
+    }
+    const attachMatch = /^\/api\/conversations\/([^/]+)\/documents(?:\/([^/]+))?$/.exec(url)
+    if (attachMatch) {
+      const id = attachMatch[1]!
+      const list = attached.get(id) ?? []
+      if (attachMatch[2] && method === 'POST') list.push(attachMatch[2])
+      if (attachMatch[2] && method === 'DELETE') list.splice(list.indexOf(attachMatch[2]), 1)
+      attached.set(id, list)
+      return Response.json({
+        documents: list.map((d) => docs.get(d)).filter(Boolean),
+      })
     }
     const match = /^\/api\/conversations\/([^/]+)(\/messages|\/regenerate)?$/.exec(url)
     if (match) {
@@ -135,7 +221,7 @@ function mockServer(
     throw new Error(`unexpected request to ${method} ${url}`)
   })
   vi.stubGlobal('fetch', mock)
-  return { mock, calls, db }
+  return { mock, calls, db, docs, attached }
 }
 
 const turnCalls = (server: ReturnType<typeof mockServer>) =>
@@ -162,7 +248,12 @@ describe('App', () => {
     const degraded: Health = {
       ...HEALTH,
       status: 'degraded',
-      litellm: { ...HEALTH.litellm, reachable: false, latency_ms: null, error: 'Cannot reach LiteLLM.' },
+      litellm: {
+        ...HEALTH.litellm,
+        reachable: false,
+        latency_ms: null,
+        error: 'Cannot reach LiteLLM.',
+      },
     }
     mockServer(() => fullResponse(DONE), { health: degraded })
     render(<App />)
@@ -195,11 +286,7 @@ describe('App', () => {
 
   it('saves the chat on the first question and keeps asking in the same chat', async () => {
     const server = mockServer(({ content }) =>
-      fullResponse(
-        frame('reasoning', { delta: 'secret thoughts' }),
-        frame('content', { delta: `reply to: ${content}` }),
-        DONE,
-      ),
+      fullResponse(frame('reasoning', { delta: 'secret thoughts' }), frame('content', { delta: `reply to: ${content}` }), DONE),
     )
     const user = userEvent.setup()
     render(<App />)
@@ -290,7 +377,9 @@ describe('App', () => {
       calls += 1
       if (calls === 1) {
         return Response.json(
-          { error: { code: 'upstream_busy', message: 'busy', retry_after_s: 5 } },
+          {
+            error: { code: 'upstream_busy', message: 'busy', retry_after_s: 5 },
+          },
           { status: 503 },
         )
       }
@@ -311,7 +400,10 @@ describe('App', () => {
     mockServer(() =>
       fullResponse(
         frame('content', { delta: 'Half an ans' }),
-        frame('error', { code: 'upstream_interrupted', message: 'The connection to LiteLLM was lost.' }),
+        frame('error', {
+          code: 'upstream_interrupted',
+          message: 'The connection to LiteLLM was lost.',
+        }),
       ),
     )
     const user = userEvent.setup()
@@ -397,7 +489,11 @@ describe('saved conversations', () => {
 
   it('opens the chat named in the address after a reload, and goes home when it is gone', async () => {
     mockServer(() => fullResponse(DONE), {
-      conversations: [conversation('c1', 'Kept', { messages: [stored('user', 'hello again')] })],
+      conversations: [
+        conversation('c1', 'Kept', {
+          messages: [stored('user', 'hello again')],
+        }),
+      ],
     })
     window.location.hash = '#/c/c1'
     const { unmount } = render(<App />)
@@ -411,7 +507,9 @@ describe('saved conversations', () => {
   })
 
   it('renames a chat', async () => {
-    const server = mockServer(() => fullResponse(DONE), { conversations: [conversation('c1', 'Before')] })
+    const server = mockServer(() => fullResponse(DONE), {
+      conversations: [conversation('c1', 'Before')],
+    })
     const user = userEvent.setup()
     render(<App />)
     await user.click(await within(sidebar()).findByRole('button', { name: 'Rename Before' }))
@@ -419,7 +517,9 @@ describe('saved conversations', () => {
     await user.clear(input)
     await user.type(input, 'After{Enter}')
     expect(await within(sidebar()).findByText('After')).toBeInTheDocument()
-    expect(server.calls.find((c) => c.method === 'PATCH')?.body).toEqual({ title: 'After' })
+    expect(server.calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+      title: 'After',
+    })
   })
 
   it('deletes a chat only after confirmation, and leaves the open chat when it is deleted', async () => {
@@ -443,14 +543,18 @@ describe('saved conversations', () => {
   })
 
   it('a changed Thinking switch is saved with the open chat', async () => {
-    const server = mockServer(() => fullResponse(DONE), { conversations: [conversation('c1', 'Chat')] })
+    const server = mockServer(() => fullResponse(DONE), {
+      conversations: [conversation('c1', 'Chat')],
+    })
     window.location.hash = '#/c/c1'
     const user = userEvent.setup()
     render(<App />)
     await waitFor(() => expect(screen.getByRole('switch', { name: 'Thinking' })).toBeChecked())
     await user.click(screen.getByRole('switch', { name: 'Thinking' }))
     await waitFor(() =>
-      expect(server.calls.find((c) => c.method === 'PATCH')?.body).toEqual({ thinking: false }),
+      expect(server.calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+        thinking: false,
+      }),
     )
   })
 
@@ -459,7 +563,11 @@ describe('saved conversations', () => {
     const server = mockServer(() => {
       calls += 1
       return calls === 1
-        ? fullResponse(META, frame('content', { delta: 'Half' }), frame('error', { code: 'upstream_interrupted', message: 'lost' }))
+        ? fullResponse(
+            META,
+            frame('content', { delta: 'Half' }),
+            frame('error', { code: 'upstream_interrupted', message: 'lost' }),
+          )
         : fullResponse(META, frame('content', { delta: 'Whole answer' }), DONE)
     })
     const user = userEvent.setup()
@@ -475,7 +583,9 @@ describe('saved conversations', () => {
 
   it('cannot switch chats or start a new one while an answer is being written', async () => {
     const live = liveStream()
-    mockServer(() => live.response, { conversations: [conversation('c1', 'Other')] })
+    mockServer(() => live.response, {
+      conversations: [conversation('c1', 'Other')],
+    })
     const user = userEvent.setup()
     render(<App />)
     await within(sidebar()).findByText('Other')
@@ -487,5 +597,188 @@ describe('saved conversations', () => {
     live.push(DONE)
     live.close()
     await waitFor(() => expect(within(sidebar()).getByRole('button', { name: 'New chat' })).toBeEnabled())
+  })
+})
+
+describe('documents', () => {
+  const openPanel = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole('button', { name: /^Documents/ }))
+    return screen.getByRole('dialog', { name: 'Documents' })
+  }
+
+  it('lists uploaded documents with their state and shows reading progress', async () => {
+    mockServer(() => fullResponse(DONE), {
+      documents: [
+        documentInfo('d1', 'report.pdf'),
+        documentInfo('d2', 'big.pdf', {
+          status: 'processing',
+          chunk_count: 10,
+          embedded_count: 4,
+        }),
+        documentInfo('d3', 'broken.pdf', {
+          status: 'error',
+          error: 'LiteLLM refused the request.',
+        }),
+      ],
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    const panel = await openPanel(user)
+    expect(await within(panel).findByText('report.pdf')).toBeInTheDocument()
+    expect(within(panel).getByText('3 pages · 7 parts · 2 KB')).toBeInTheDocument()
+    expect(within(panel).getByText('Reading 4/10')).toBeInTheDocument()
+    expect(within(panel).getByRole('alert')).toHaveTextContent('LiteLLM refused the request.')
+  })
+
+  it('uploads a file as the request body and uses it in this chat at once', async () => {
+    const server = mockServer()
+    const user = userEvent.setup()
+    render(<App />)
+    const panel = await openPanel(user)
+    const file = new File(['hello'], 'my notes.txt', { type: 'text/plain' })
+    await user.upload(within(panel).getByLabelText('Choose files'), file)
+
+    expect(await within(panel).findByText('my notes.txt')).toBeInTheDocument()
+    const post = server.mock.mock.calls.find(([u, i]) => String(u) === '/api/documents' && i?.method === 'POST')!
+    const init = post[1] as RequestInit
+    expect(init.headers).toMatchObject({
+      'content-type': 'application/octet-stream',
+      'x-filename': 'my%20notes.txt',
+    })
+    expect(init.body).toBe(file)
+    expect(
+      within(panel).getByRole('checkbox', {
+        name: 'Use my notes.txt in this chat',
+      }),
+    ).toBeChecked()
+    expect(screen.getByRole('button', { name: 'Documents (1)' })).toBeInTheDocument()
+  })
+
+  it('says why a file was refused', async () => {
+    mockServer()
+    const user = userEvent.setup({ applyAccept: false }) // the app's file picker would hide it; drag and drop does not
+    render(<App />)
+    const panel = await openPanel(user)
+    await user.upload(
+      within(panel).getByLabelText('Choose files'),
+      new File(['x'], 'bad.xlsx', { type: 'application/vnd.ms-excel' }),
+    )
+    expect(await within(panel).findByRole('alert')).toHaveTextContent("bad.xlsx: 'bad.xlsx' is not a supported file type.")
+  })
+
+  it('documents chosen in a new chat are attached when the chat is saved, before the question', async () => {
+    const server = mockServer(() => fullResponse(frame('content', { delta: 'ok' }), DONE), {
+      documents: [documentInfo('d1', 'report.pdf')],
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    const panel = await openPanel(user)
+    await user.click(
+      await within(panel).findByRole('checkbox', {
+        name: 'Use report.pdf in this chat',
+      }),
+    )
+    await user.type(box(), 'what is in it?{Enter}')
+    await screen.findByText('ok')
+
+    const order = server.calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.url}`)
+    expect(order).toEqual([
+      'POST /api/conversations',
+      'POST /api/conversations/new1/documents/d1',
+      'POST /api/conversations/new1/messages',
+    ])
+    expect(screen.getByRole('checkbox', { name: 'Use report.pdf in this chat' })).toBeChecked()
+  })
+
+  it('ticking in a saved chat attaches and detaches on the server', async () => {
+    const server = mockServer(() => fullResponse(DONE), {
+      conversations: [conversation('c1', 'Chat')],
+      documents: [documentInfo('d1', 'report.pdf')],
+    })
+    window.location.hash = '#/c/c1'
+    const user = userEvent.setup()
+    render(<App />)
+    const panel = await openPanel(user)
+    const box1 = await within(panel).findByRole('checkbox', {
+      name: 'Use report.pdf in this chat',
+    })
+    await user.click(box1)
+    await waitFor(() => expect(server.attached.get('c1')).toEqual(['d1']))
+    expect(box1).toBeChecked()
+    await user.click(box1)
+    await waitFor(() => expect(server.attached.get('c1')).toEqual([]))
+    expect(box1).not.toBeChecked()
+  })
+
+  it('shows the attached documents of a saved chat when it is opened', async () => {
+    const server = mockServer(() => fullResponse(DONE), {
+      conversations: [conversation('c1', 'Chat')],
+      documents: [documentInfo('d1', 'report.pdf'), documentInfo('d2', 'other.pdf')],
+    })
+    server.attached.set('c1', ['d2'])
+    window.location.hash = '#/c/c1'
+    const user = userEvent.setup()
+    render(<App />)
+    expect(await screen.findByRole('button', { name: 'Documents (1)' })).toBeInTheDocument()
+    const panel = await openPanel(user)
+    expect(
+      within(panel).getByRole('checkbox', {
+        name: 'Use other.pdf in this chat',
+      }),
+    ).toBeChecked()
+    expect(
+      within(panel).getByRole('checkbox', {
+        name: 'Use report.pdf in this chat',
+      }),
+    ).not.toBeChecked()
+  })
+
+  it('deleting a document asks first, then removes it', async () => {
+    const server = mockServer(() => fullResponse(DONE), {
+      documents: [documentInfo('d1', 'report.pdf')],
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    const panel = await openPanel(user)
+    await user.click(await within(panel).findByRole('button', { name: 'Delete report.pdf' }))
+    await user.click(within(panel).getByRole('button', { name: 'Cancel' }))
+    expect(server.docs.size).toBe(1)
+    await user.click(within(panel).getByRole('button', { name: 'Delete report.pdf' }))
+    await user.click(within(panel).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(server.docs.size).toBe(0))
+    expect(await within(panel).findByText('No documents yet.')).toBeInTheDocument()
+  })
+
+  it('shows the sources under an answer, and again after the chat is reopened', async () => {
+    const sources = {
+      mode: 'search' as const,
+      sources: [
+        { n: 1, document_id: 'd1', filename: 'report.pdf', page: 3 },
+        { n: 2, document_id: 'd1', filename: 'report.pdf', page: 8 },
+      ],
+      skipped: [{ document_id: 'd2', filename: 'new.pdf', status: 'processing' }],
+    }
+    mockServer(() => fullResponse(META, frame('sources', sources), frame('content', { delta: 'See [1].' }), DONE))
+    const user = userEvent.setup()
+    const { unmount } = render(<App />)
+    await user.type(box(), 'q{Enter}')
+    const summary = await screen.findByText('Sources (2) · best matches')
+    await user.click(summary)
+    expect(screen.getByText('report.pdf, page 3')).toBeInTheDocument()
+    expect(screen.getByText('report.pdf, page 8')).toBeInTheDocument()
+    expect(screen.getByText(/new\.pdf \(processing\)/)).toBeInTheDocument()
+    unmount()
+
+    vi.unstubAllGlobals()
+    mockServer(() => fullResponse(DONE), {
+      conversations: [
+        conversation('c9', 'Saved', {
+          messages: [stored('user', 'q'), stored('assistant', 'See [1].', { sources })],
+        }),
+      ],
+    })
+    window.location.hash = '#/c/c9'
+    render(<App />)
+    expect(await screen.findByText('Sources (2) · best matches')).toBeInTheDocument()
   })
 })

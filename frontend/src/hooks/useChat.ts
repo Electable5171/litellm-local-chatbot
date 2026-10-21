@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { streamTurn } from '../api/chat'
 import { createConversation, getConversation } from '../api/conversations'
+import { attachDocument } from '../api/documents'
 import { ApiError, describeError } from '../api/errors'
 import type { ChatEvent, ConversationWithMessages } from '../api/types'
 import { chatReducer, fromStored, initialState, isBusy } from '../state/chatReducer'
@@ -10,6 +11,10 @@ export interface ChatOptions {
   conversationId: string | null
   model?: string
   thinking: boolean
+  /** Documents chosen for a new chat; they are attached when the chat is saved. */
+  attachedIds: string[]
+  /** A new chat was saved under this id (with its documents attached). */
+  onCreated: (id: string) => void
   /** The page address should show this conversation (called when a new chat gets saved). */
   onOpen: (id: string | null) => void
   /** A saved conversation was loaded: the header follows its model and Thinking setting. */
@@ -93,7 +98,9 @@ export function useChat(options: ChatOptions) {
           id = (await createConversation({ model, thinking })).id
           createdRef.current = id
           setLoadedId(id)
+          optionsRef.current.onCreated(id)
           optionsRef.current.onOpen(id)
+          for (const documentId of optionsRef.current.attachedIds) await attachDocument(id, documentId)
         }
         for await (const event of streamTurn(id, turn, controller.signal)) {
           pending.push(event)

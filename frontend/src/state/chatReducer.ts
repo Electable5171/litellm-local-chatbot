@@ -1,4 +1,4 @@
-import type { ChatEvent, StoredMessage } from '../api/types'
+import type { ChatEvent, SourcesInfo, StoredMessage } from '../api/types'
 
 export type MessageStatus = 'streaming' | 'done' | 'stopped' | 'error'
 
@@ -30,6 +30,8 @@ export interface UiMessage {
   saved: boolean
   error?: MessageError
   stats?: MessageStats
+  /** The document parts the answer was based on, when documents were attached. */
+  sources?: SourcesInfo
 }
 
 export interface ChatState {
@@ -62,6 +64,8 @@ function applyEvent(message: UiMessage, event: ChatEvent, now: number): UiMessag
   switch (event.type) {
     case 'meta':
       return { ...message, trimmed: event.trimmed_messages, saved: true }
+    case 'sources':
+      return { ...message, sources: { mode: event.mode, sources: event.sources, skipped: event.skipped } }
     case 'reasoning':
       return { ...message, reasoning: message.reasoning + event.delta }
     case 'content': {
@@ -172,6 +176,7 @@ export function fromStored(m: StoredMessage): UiMessage {
     thinkingMs: m.thinking_ms ?? undefined,
     trimmed: m.trimmed ? 1 : 0,
     saved: true,
+    sources: m.sources ?? undefined,
     error: m.error ? { code: m.error.code, message: m.error.message } : undefined,
     stats: hasStats
       ? {

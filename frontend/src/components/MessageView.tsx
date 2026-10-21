@@ -15,6 +15,33 @@ function explain(error: MessageError): string {
   }
 }
 
+function Sources({ message }: { message: UiMessage }) {
+  const info = message.sources
+  if (!info) return null
+  const skipped = info.skipped.map((d) => `${d.filename} (${d.status})`)
+  if (info.sources.length === 0 && skipped.length === 0) return null
+  return (
+    <details className="sources">
+      <summary>
+        {info.sources.length > 0
+          ? `Sources (${info.sources.length})${info.mode === 'search' ? ' · best matches' : ''}`
+          : 'No document was used'}
+      </summary>
+      {info.sources.length > 0 && (
+        <ol>
+          {info.sources.map((s) => (
+            <li key={s.n} value={s.n}>
+              {s.filename}
+              {s.page ? `, page ${s.page}` : ''}
+            </li>
+          ))}
+        </ol>
+      )}
+      {skipped.length > 0 && <p className="note">Not ready, so not used: {skipped.join(', ')}</p>}
+    </details>
+  )
+}
+
 function Footer({ message }: { message: UiMessage }) {
   const { copied, copy } = useCopy()
   const { stats } = message
@@ -26,12 +53,8 @@ function Footer({ message }: { message: UiMessage }) {
   return (
     <footer className="meta">
       {message.status === 'stopped' && <span className="note">Stopped</span>}
-      {stats?.finishReason === 'length' && (
-        <span className="note">Cut off at the output limit (thinking counts towards it)</span>
-      )}
-      {message.trimmed > 0 && (
-        <span className="note">Older messages were left out to fit the model</span>
-      )}
+      {stats?.finishReason === 'length' && <span className="note">Cut off at the output limit (thinking counts towards it)</span>}
+      {message.trimmed > 0 && <span className="note">Older messages were left out to fit the model</span>}
       {parts.length > 0 && <span>{parts.join(' · ')}</span>}
       {message.content && (
         <button type="button" className="ghost small" onClick={() => copy(message.content)}>
@@ -61,9 +84,7 @@ export function MessageView({ message, isLast, onRetry }: Props) {
   const canRetry = isLast && (message.status === 'error' || message.status === 'stopped')
   return (
     <article className="msg assistant" aria-busy={streaming}>
-      {message.reasoning && (
-        <ThinkingBlock reasoning={message.reasoning} active={thinking} thinkingMs={message.thinkingMs} />
-      )}
+      {message.reasoning && <ThinkingBlock reasoning={message.reasoning} active={thinking} thinkingMs={message.thinkingMs} />}
       {thinking && !message.reasoning && <p className="waiting">Waiting for the model…</p>}
       {message.content && <Markdown text={message.content} />}
       {message.error && (
@@ -71,6 +92,7 @@ export function MessageView({ message, isLast, onRetry }: Props) {
           {explain(message.error)}
         </div>
       )}
+      <Sources message={message} />
       <Footer message={message} />
       {canRetry && (
         <button type="button" className="ghost" onClick={onRetry}>

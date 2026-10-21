@@ -1,11 +1,14 @@
 import { useCallback, useState } from 'react'
 import { updateConversation } from './api/conversations'
 import { Composer } from './components/Composer'
+import { DocumentsPanel } from './components/DocumentsPanel'
 import { Header } from './components/Header'
 import { MessageList } from './components/MessageList'
 import { Sidebar } from './components/Sidebar'
+import { useAttached } from './hooks/useAttached'
 import { useChat } from './hooks/useChat'
 import { useConversations } from './hooks/useConversations'
+import { useDocuments } from './hooks/useDocuments'
 import { useRoute } from './hooks/useRoute'
 import { useHealth, useModels } from './hooks/useServer'
 
@@ -36,6 +39,9 @@ export default function App() {
   const [thinking, setThinking] = useState(loadThinking)
   const [chosenModel, setChosenModel] = useState<string>()
   const [drawer, setDrawer] = useState(false)
+  const [docsOpen, setDocsOpen] = useState(false)
+  const documents = useDocuments()
+  const attached = useAttached(routeId)
   const model = chosenModel ?? models?.default
 
   const go = useCallback(
@@ -54,6 +60,8 @@ export default function App() {
     conversationId: routeId,
     model,
     thinking,
+    attachedIds: attached.ids,
+    onCreated: attached.adopt,
     onOpen: go,
     onLoaded: (conversation) => {
       setThinking(conversation.thinking)
@@ -116,8 +124,36 @@ export default function App() {
             <MessageList messages={chat.messages} onRetry={chat.retry} />
           </>
         )}
-        <Composer busy={chat.busy} onSend={chat.send} onStop={chat.stop} />
+        <Composer
+          busy={chat.busy}
+          onSend={chat.send}
+          onStop={chat.stop}
+          documentCount={attached.ids.length}
+          onDocuments={() => setDocsOpen((open) => !open)}
+        />
       </div>
+      {docsOpen && (
+        <DocumentsPanel
+          docs={documents.items}
+          attachedIds={attached.ids}
+          problems={documents.problems}
+          attachError={attached.error}
+          uploading={documents.uploading}
+          locked={chat.busy}
+          onClose={() => setDocsOpen(false)}
+          onUpload={(files) => {
+            void documents.upload(files).then((stored) => {
+              // New uploads are used in this chat right away.
+              for (const id of stored) if (!attached.ids.includes(id)) void attached.toggle(id)
+            })
+          }}
+          onToggle={(id) => void attached.toggle(id)}
+          onDelete={(id) => {
+            attached.forget(id)
+            void documents.remove(id)
+          }}
+        />
+      )}
     </div>
   )
 }
