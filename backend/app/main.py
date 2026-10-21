@@ -8,10 +8,11 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import health, models
+from app.api import chat, health, models
 from app.config import Settings, get_settings
 from app.errors import install_error_handlers
 from app.middleware import RequestIdMiddleware
+from app.services.chat import ChatService
 from app.services.health import HealthService
 from app.services.llm import LLMClient
 
@@ -27,6 +28,7 @@ def create_app(settings: Settings | None = None, llm: LLMClient | None = None) -
         app.state.settings = settings
         app.state.llm = llm or LLMClient(settings)
         app.state.health = HealthService(app.state.llm, settings.health_cache_s)
+        app.state.chat = ChatService(app.state.llm, settings)
         try:
             yield
         finally:
@@ -37,6 +39,7 @@ def create_app(settings: Settings | None = None, llm: LLMClient | None = None) -
     install_error_handlers(app)
     app.include_router(health.router)
     app.include_router(models.router)
+    app.include_router(chat.router)
 
     # Serve the built React app from the same process (one URL on the laptop). Must come last.
     if FRONTEND_DIST.is_dir():

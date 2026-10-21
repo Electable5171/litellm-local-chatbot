@@ -17,6 +17,19 @@ The first run creates `backend\.env` from `backend\.env.example` and asks you to
 
 The app listens on `127.0.0.1` only, because it has no login.
 
+## Chat from the command line (until the web UI exists)
+
+With the app running in one PowerShell window, open a second one:
+
+```powershell
+.\scripts\chat.cmd "What is 17*23?"
+.\scripts\chat.cmd --no-think "Say hi in three words"     # switch the model's thinking off
+.\scripts\chat.cmd --hide-thinking "Explain B-trees"        # think, but do not print the thinking
+.\scripts\chat.cmd -i                                       # a conversation; /new starts over, /quit leaves
+```
+
+The thinking is printed live under `[thinking]`, then the answer under `[answer]`, then a line with the token count, total time and time to first token. The model can take several seconds of thinking before the first answer word.
+
 ## Using the company Nexus (when the proxy blocks public PyPI)
 
 If your web proxy refuses package downloads (`403 Unsuitable material` for `files.pythonhosted.org`), install from the company Nexus instead. `run.cmd` then uses `pip` with a hash-pinned list (`backend/requirements.lock.txt`), so every file is verified against the same hashes as the public release.

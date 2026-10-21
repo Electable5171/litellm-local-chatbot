@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # Limits (the model accepts 262,144 tokens; the working budget is smaller on purpose)
     max_context_tokens: int = 262_144
     context_budget_tokens: int = 32_768
-    max_output_tokens: int = 4_096
+    max_output_tokens: int = 8_192  # reasoning tokens count towards this
 
     # HTTP behaviour towards LiteLLM
     connect_timeout_s: float = 10.0
