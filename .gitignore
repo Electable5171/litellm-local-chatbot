@@ -23,3 +23,4 @@ data/
 Thumbs.db
 .idea/
 .vscode/
+.venv-pip/

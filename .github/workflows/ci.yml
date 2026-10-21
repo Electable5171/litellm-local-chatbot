@@ -28,6 +28,11 @@ jobs:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
       - run: uv sync --locked
+      - name: requirements.lock.txt matches uv.lock
+        if: runner.os == 'Linux'
+        run: |
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements.lock.txt
+          git diff --exit-code -- requirements.lock.txt
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest -q
