@@ -150,7 +150,7 @@ try {
     }
 
     if (-not (Test-Path (Join-Path $repo "frontend\dist"))) {
-        Write-Host "Note: the web UI is not built yet; only the API is available (/api/health)." -ForegroundColor Yellow
+        Write-Host "Note: the web UI is not built yet; only the API is available. Build it with  .\scripts\build-ui.cmd" -ForegroundColor Yellow
     }
     Write-Host "Starting on http://127.0.0.1:8000  (Ctrl+C to stop)" -ForegroundColor Cyan
     if ($python) { & $python -m app } else { & uv run --locked python -m app }

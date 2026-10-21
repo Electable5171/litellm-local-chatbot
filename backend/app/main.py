@@ -11,7 +11,7 @@ from app import __version__
 from app.api import chat, health, models
 from app.config import Settings, get_settings
 from app.errors import install_error_handlers
-from app.middleware import RequestIdMiddleware
+from app.middleware import RequestIdMiddleware, SecurityHeadersMiddleware
 from app.services.chat import ChatService
 from app.services.health import HealthService
 from app.services.llm import LLMClient
@@ -35,6 +35,7 @@ def create_app(settings: Settings | None = None, llm: LLMClient | None = None) -
             await app.state.llm.aclose()
 
     app = FastAPI(title="litellm-local-chatbot", version=__version__, lifespan=lifespan)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RequestIdMiddleware)
     install_error_handlers(app)
     app.include_router(health.router)
