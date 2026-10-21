@@ -35,6 +35,9 @@ FLUSH_INTERVAL_S = 2.0
 TITLE_MAX = 60
 MAX_MESSAGE_CHARS = 200_000
 
+# A module-level alias: inside the class, the name ``list`` is the method ``list()`` below.
+DocumentList = list[dict[str, Any]]
+
 
 def make_title(text: str) -> str:
     """The first line of the first question, shortened."""
@@ -181,7 +184,7 @@ class ConversationService:
 
     # -- attached documents ------------------------------------------------------------------
 
-    async def documents(self, conversation_id: str) -> list[dict[str, Any]]:
+    async def documents(self, conversation_id: str) -> DocumentList:
         def load(conn):
             if repo.get_conversation(conn, conversation_id) is None:
                 return None
@@ -192,7 +195,7 @@ class ConversationService:
             raise _not_found()
         return [document_json(r) for r in rows]
 
-    async def attach(self, conversation_id: str, document_id: str) -> list[dict[str, Any]]:
+    async def attach(self, conversation_id: str, document_id: str) -> DocumentList:
         def work(conn):
             if repo.get_conversation(conn, conversation_id) is None:
                 raise _not_found()
@@ -203,7 +206,7 @@ class ConversationService:
         await self._db.run(work)
         return await self.documents(conversation_id)
 
-    async def detach(self, conversation_id: str, document_id: str) -> list[dict[str, Any]]:
+    async def detach(self, conversation_id: str, document_id: str) -> DocumentList:
         removed = await self._db.run(lambda c: doc_store.detach(c, conversation_id, document_id))
         if not removed:
             raise ApiError("document_not_attached", "That document is not attached.", 404)
