@@ -106,3 +106,49 @@ def processing_ids(conn: sqlite3.Connection) -> list[str]:
 
 def delete_document(conn: sqlite3.Connection, document_id: str) -> bool:
     return conn.execute("DELETE FROM documents WHERE id = ?", (document_id,)).rowcount > 0
+
+
+# -- attachments ---------------------------------------------------------------------------------
+
+
+def attach(conn: sqlite3.Connection, conversation_id: str, document_id: str) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO conversation_documents (conversation_id, document_id, created_at)"
+        " VALUES (?, ?, ?)",
+        (conversation_id, document_id, now()),
+    )
+
+
+def detach(conn: sqlite3.Connection, conversation_id: str, document_id: str) -> bool:
+    cursor = conn.execute(
+        "DELETE FROM conversation_documents WHERE conversation_id = ? AND document_id = ?",
+        (conversation_id, document_id),
+    )
+    return cursor.rowcount > 0
+
+
+def attached_documents(conn: sqlite3.Connection, conversation_id: str) -> list[Row]:
+    rows = conn.execute(
+        "SELECT d.id, d.filename, d.status, d.error, d.page_count, d.chunk_count,"
+        " d.embedding_model, d.embedding_dim, d.size_bytes, d.mime, d.created_at,"
+        " (SELECT COUNT(*) FROM chunks c WHERE c.document_id = d.id"
+        "  AND c.embedding IS NOT NULL) AS embedded_count"
+        " FROM conversation_documents cd JOIN documents d ON d.id = cd.document_id"
+        " WHERE cd.conversation_id = ? ORDER BY cd.created_at, d.id",
+        (conversation_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def chunks_of(conn: sqlite3.Connection, document_ids: list[str]) -> list[Row]:
+    """All chunks of the given documents, in document and reading order."""
+    if not document_ids:
+        return []
+    marks = ",".join("?" * len(document_ids))
+    rows = conn.execute(
+        "SELECT c.id, c.document_id, c.ordinal, c.page, c.text, c.token_count, c.embedding"  # noqa: S608
+        f" FROM chunks c WHERE c.document_id IN ({marks}) AND c.embedding IS NOT NULL"
+        " ORDER BY c.document_id, c.ordinal",
+        document_ids,
+    ).fetchall()
+    return [dict(r) for r in rows]

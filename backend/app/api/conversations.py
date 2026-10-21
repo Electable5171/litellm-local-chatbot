@@ -81,3 +81,23 @@ async def regenerate(conversation_id: str, request: Request):
     """Answer the last question again, replacing the last answer."""
     _, events = await _service(request).regenerate(conversation_id)
     return _stream(events)
+
+
+@router.get("/{conversation_id}/documents")
+async def list_attached(conversation_id: str, request: Request) -> dict[str, Any]:
+    return {"documents": await _service(request).documents(conversation_id)}
+
+
+@router.post("/{conversation_id}/documents/{document_id}")
+async def attach_document(
+    conversation_id: str, document_id: str, request: Request
+) -> dict[str, Any]:
+    """Search this document when answering questions in this conversation."""
+    return {"documents": await _service(request).attach(conversation_id, document_id)}
+
+
+@router.delete("/{conversation_id}/documents/{document_id}")
+async def detach_document(
+    conversation_id: str, document_id: str, request: Request
+) -> dict[str, Any]:
+    return {"documents": await _service(request).detach(conversation_id, document_id)}
