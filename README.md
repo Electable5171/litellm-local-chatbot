@@ -39,6 +39,24 @@ python -m pip config list     # should now show the index-url
 
 This writes `%APPDATA%\pip\pip.ini`, which is outside the repository. Never put the token in the repository. A token with only read access can be revoked without side effects. Use `-Installer pip` to force this route, or `-Installer uv` to force public PyPI.
 
+### If pip says the certificate is not trusted
+
+`A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider` means Nexus uses a certificate from a company CA that Windows does not know. Do not use `--trusted-host`, `PIP_TRUSTED_HOST`, or any setting that turns certificate checking off: that lets anyone on the network impersonate the package server.
+
+1. Ask the Nexus administrators for the **CA certificate** (the root, plus any intermediate) in PEM / Base64 format, and for its **SHA-256 fingerprint**.
+2. Save it outside the repository, for example `%USERPROFILE%\certs\company-root-ca.pem`. A PEM file starts with `-----BEGIN CERTIFICATE-----`. A binary `.cer` file can be converted with `certutil -encode in.cer out.pem`. If there is an intermediate, put both certificates in the same file, one after the other.
+3. Check the fingerprint against what the administrators told you:
+   ```powershell
+   certutil -dump "$env:USERPROFILE\certs\company-root-ca.pem"      # compare "Cert Hash(sha256)"
+   ```
+4. Tell pip to trust that file, for pip only:
+   ```powershell
+   python -m pip config set global.cert "$env:USERPROFILE\certs\company-root-ca.pem"
+   .\scripts\run.cmd
+   ```
+
+Adding the CA to the Windows certificate store instead would make every program you run trust it, which is broader than needed. Do that only if IT asks you to.
+
 ## Develop and test
 
 ```bash

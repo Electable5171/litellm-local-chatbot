@@ -49,7 +49,10 @@ function Show-InstallHelp {
     Write-Host "  - 403 / 'Unsuitable material' for files.pythonhosted.org: your web proxy blocks package downloads." -ForegroundColor Yellow
     Write-Host "    This is a company policy; do not work around it. Use the company package index (Nexus):" -ForegroundColor Yellow
     Write-Host "    see 'Using the company Nexus' in the README, then run  .\scripts\run.cmd -Installer pip" -ForegroundColor Yellow
-    Write-Host "  - Certificate errors: your company proxy re-signs HTTPS; tell me the exact message." -ForegroundColor Yellow
+    Write-Host "  - 'certificate ... not trusted' / CERTIFICATE_VERIFY_FAILED: the Nexus certificate comes from a company CA that Windows" -ForegroundColor Yellow
+    Write-Host "    does not trust. Get that CA certificate from the Nexus administrators, check its fingerprint with them, then run:" -ForegroundColor Yellow
+    Write-Host "      python -m pip config set global.cert ""C:\Users\<you>\certs\company-root-ca.pem""" -ForegroundColor Yellow
+    Write-Host "    Never use --trusted-host or turn certificate checking off. See the README section 'If pip says the certificate is not trusted'." -ForegroundColor Yellow
     Write-Host "  - Offline, with dependencies already installed: run  .\scripts\run.cmd -SkipSync" -ForegroundColor Yellow
 }
 
