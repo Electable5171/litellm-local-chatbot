@@ -13,11 +13,20 @@ git pull
 .\scripts\run.cmd
 ```
 
-The first run creates `backend\.env` from `backend\.env.example` and asks you to set `LITELLM_API_KEY` (your LiteLLM virtual key). Run it again, then open http://127.0.0.1:8000/api/health. The web UI comes in a later release; for now only the API is available.
+The first run creates `backend\.env` from `backend\.env.example` and asks you to set `LITELLM_API_KEY` (your LiteLLM virtual key). Run it again, then open http://127.0.0.1:8000/api/health.
+
+**The web UI** has to be built once (and again after a `git pull` that changes `frontend\`). It needs Node 22 or newer, which you have:
+
+```powershell
+.\scripts\build-ui.cmd
+.\scripts\run.cmd
+```
+
+Then open **http://127.0.0.1:8000/**. You can watch the model think, stop an answer, switch Thinking off, copy code, and start a new chat. A conversation lives only in the open page for now; saving comes next. If `npm` is blocked by your web proxy, the build script explains what to ask the Nexus administrators for (an npm repository URL).
 
 The app listens on `127.0.0.1` only, because it has no login.
 
-## Chat from the command line (until the web UI exists)
+## Chat from the command line
 
 With the app running in one PowerShell window, open a second one:
 
@@ -88,7 +97,16 @@ uv run ruff check . && uv run ruff format --check .
 uv run pytest -q          # LiteLLM is mocked; no network or key needed
 ```
 
-After changing dependencies, run `uv lock` and regenerate the pinned list used by the Nexus route (CI checks that it is current):
+The frontend (React, Vite, TypeScript):
+
+```bash
+cd frontend
+npm ci
+npm run dev           # http://localhost:5173, forwards /api to the backend on :8000
+npm run lint && npm test && npm run build
+```
+
+After changing Python dependencies, run `uv lock` and regenerate the pinned list used by the Nexus route (CI checks that it is current):
 
 ```bash
 uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements.lock.txt

@@ -46,3 +46,37 @@ class RequestIdMiddleware:
                 int((time.perf_counter() - start) * 1000),
                 request_id,
             )
+
+
+# What the browser may load for this page. Everything comes from this app; images only from this
+# app or inline data. Even if an answer smuggled markup past the sanitiser, the browser would not
+# run it or fetch anything from another server.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+    "connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; "
+    "form-action 'self'; frame-ancestors 'none'"
+)
+SECURITY_HEADERS = [
+    (b"content-security-policy", CONTENT_SECURITY_POLICY.encode()),
+    (b"x-content-type-options", b"nosniff"),
+    (b"referrer-policy", b"no-referrer"),
+]
+
+
+class SecurityHeadersMiddleware:
+    """Adds browser safety headers to every response."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                message["headers"] = [*message.get("headers", []), *SECURITY_HEADERS]
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
