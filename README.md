@@ -22,7 +22,7 @@ The first run creates `backend\.env` from `backend\.env.example` and asks you to
 .\scripts\run.cmd
 ```
 
-Then open **http://127.0.0.1:8000/**. You can watch the model think, stop an answer, switch Thinking off, copy code, and start a new chat. A conversation lives only in the open page for now; saving comes next. If `npm` is blocked by your web proxy, the build script explains what to ask the Nexus administrators for (an npm repository URL).
+Then open **http://127.0.0.1:8000/**. You can watch the model think, stop an answer, switch Thinking off, copy code, and start a new chat. Conversations are saved automatically (left sidebar: open, rename, delete) and are still there after a reload or restart. They are stored **in plain text** in `backend\data\chat.db` on this laptop (WAL files sit next to it; a backup of the database is made in `backend\data\backups\` before an upgrade changes it), so rely on disk encryption such as BitLocker, and do not copy that folder around. Deleting a chat overwrites its data in the file. If `npm` is blocked by your web proxy, the build script explains what to ask the Nexus administrators for (an npm repository URL).
 
 The app listens on `127.0.0.1` only, because it has no login.
 

@@ -1,5 +1,5 @@
 import type { ChatEvent } from '../api/types'
-import { buildHistory, chatReducer, initialState, isBusy, type ChatState } from './chatReducer'
+import { chatReducer, fromStored, initialState, isBusy, type ChatState } from './chatReducer'
 
 const send = (state: ChatState, text = 'hi', now = 1000) =>
   chatReducer(state, { type: 'send', userId: 'u', assistantId: 'a', text, now })
@@ -88,18 +88,62 @@ describe('chatReducer', () => {
   })
 })
 
-describe('buildHistory', () => {
-  it('sends questions and finished or stopped answers, never reasoning or failed answers', () => {
-    let state = send(initialState, 'q1')
-    state = events(state, [{ type: 'reasoning', delta: 'secret' }, { type: 'content', delta: 'a1' }, DONE])
-    state = chatReducer(state, { type: 'send', userId: 'u2', assistantId: 'a2', text: 'q2', now: 3000 })
-    state = chatReducer(state, { type: 'fail', error: { code: 'x', message: 'x' }, now: 3100 })
-    state = chatReducer(state, { type: 'send', userId: 'u3', assistantId: 'a3', text: 'q3', now: 4000 })
-    expect(buildHistory(state.messages.slice(0, -1))).toEqual([
-      { role: 'user', content: 'q1' },
-      { role: 'assistant', content: 'a1' },
-      { role: 'user', content: 'q2' },
-      { role: 'user', content: 'q3' },
-    ])
+describe('saved messages', () => {
+  const base = {
+    id: 'x',
+    role: 'assistant' as const,
+    content: 'answer',
+    reasoning: 'thoughts',
+    status: 'complete' as const,
+    error: null,
+    finish_reason: 'stop',
+    usage: { prompt_tokens: 5, completion_tokens: 42 },
+    latency_ms: 9000,
+    ttft_ms: 300,
+    thinking_ms: 3500,
+    trimmed: false,
+    created_at: '2026-10-21T10:00:00.000Z',
+  }
+
+  it('a finished answer keeps its thinking time and statistics', () => {
+    expect(fromStored(base)).toMatchObject({
+      status: 'done',
+      saved: true,
+      thinkingMs: 3500,
+      reasoning: 'thoughts',
+      stats: { completionTokens: 42, latencyMs: 9000, ttftMs: 300, finishReason: 'stop' },
+    })
+  })
+
+  it('stopped and failed answers come back as stopped and failed', () => {
+    expect(fromStored({ ...base, status: 'cancelled' }).status).toBe('stopped')
+    const failed = fromStored({
+      ...base,
+      status: 'error',
+      usage: null,
+      latency_ms: null,
+      error: { code: 'interrupted', message: 'The app stopped.' },
+    })
+    expect(failed).toMatchObject({ status: 'error', error: { code: 'interrupted' } })
+    expect(failed.stats).toBeUndefined()
+  })
+
+  it('the server confirms an answer is stored with its first event', () => {
+    let state = send(initialState)
+    expect(state.messages[1]!.saved).toBe(false)
+    state = events(state, [{ type: 'meta', model: 'm', thinking: true, trimmed_messages: 0 }])
+    expect(state.messages[1]!.saved).toBe(true)
+  })
+
+  it('load replaces the conversation', () => {
+    const state = chatReducer(send(initialState), { type: 'load', messages: [fromStored(base)] })
+    expect(state.messages).toHaveLength(1)
+  })
+
+  it('dropLastTurn removes the question and a failed answer together', () => {
+    const failed = chatReducer(send(initialState), { type: 'stop', now: 2000 })
+    expect(chatReducer(failed, { type: 'dropLastTurn' }).messages).toEqual([])
+    const streaming = send(initialState)
+    expect(chatReducer(streaming, { type: 'dropLastTurn' })).toBe(streaming)
   })
 })

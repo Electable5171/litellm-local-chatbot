@@ -1,0 +1,83 @@
+from typing import Any
+
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+from app.api.chat import sse
+from app.services.conversations import ConversationService
+
+router = APIRouter(prefix="/api/conversations")
+
+
+class CreateIn(BaseModel):
+    model: str | None = None
+    thinking: bool = True
+    system_prompt: str = Field(default="", max_length=20_000)
+
+
+class UpdateIn(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    model: str | None = None
+    thinking: bool | None = None
+    system_prompt: str | None = Field(default=None, max_length=20_000)
+
+
+class MessageIn(BaseModel):
+    content: str = Field(min_length=1, max_length=200_000)
+
+
+def _service(request: Request) -> ConversationService:
+    return request.app.state.conversations
+
+
+def _stream(events) -> StreamingResponse:
+    return StreamingResponse(
+        sse(events),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("")
+async def list_conversations(request: Request) -> dict[str, Any]:
+    return {"conversations": await _service(request).list()}
+
+
+@router.post("", status_code=201)
+async def create_conversation(body: CreateIn, request: Request) -> dict[str, Any]:
+    return await _service(request).create(
+        model=body.model, thinking=body.thinking, system_prompt=body.system_prompt
+    )
+
+
+@router.get("/{conversation_id}")
+async def get_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
+    return await _service(request).get(conversation_id)
+
+
+@router.patch("/{conversation_id}")
+async def update_conversation(
+    conversation_id: str, body: UpdateIn, request: Request
+) -> dict[str, Any]:
+    return await _service(request).update(conversation_id, **body.model_dump(exclude_unset=True))
+
+
+@router.delete("/{conversation_id}", status_code=204)
+async def delete_conversation(conversation_id: str, request: Request) -> Response:
+    await _service(request).delete(conversation_id)
+    return Response(status_code=204)
+
+
+@router.post("/{conversation_id}/messages")
+async def send_message(conversation_id: str, body: MessageIn, request: Request):
+    """Save the question, then stream and save the answer (server-sent events)."""
+    _, events = await _service(request).send(conversation_id, body.content)
+    return _stream(events)
+
+
+@router.post("/{conversation_id}/regenerate")
+async def regenerate(conversation_id: str, request: Request):
+    """Answer the last question again, replacing the last answer."""
+    _, events = await _service(request).regenerate(conversation_id)
+    return _stream(events)
