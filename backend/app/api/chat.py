@@ -23,7 +23,7 @@ class ChatIn(BaseModel):
     max_tokens: int | None = Field(default=None, ge=1, le=262_144)
 
 
-async def _sse(events: AsyncIterator[Event]) -> AsyncGenerator[str, None]:
+async def sse(events: AsyncIterator[Event]) -> AsyncGenerator[str, None]:
     try:
         async for name, data in events:
             yield f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -47,7 +47,7 @@ async def chat(body: ChatIn, request: Request) -> StreamingResponse:
     )
     stream = await service.open_stream(prepared)  # raises a clean error before streaming starts
     return StreamingResponse(
-        _sse(service.events(prepared, stream)),
+        sse(service.events(prepared, stream)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

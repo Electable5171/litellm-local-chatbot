@@ -8,11 +8,13 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import chat, health, models
+from app.api import chat, conversations, health, models
 from app.config import Settings, get_settings
+from app.db.database import Database
 from app.errors import install_error_handlers
 from app.middleware import RequestIdMiddleware, SecurityHeadersMiddleware
 from app.services.chat import ChatService
+from app.services.conversations import ConversationService
 from app.services.health import HealthService
 from app.services.llm import LLMClient
 
@@ -29,10 +31,16 @@ def create_app(settings: Settings | None = None, llm: LLMClient | None = None) -
         app.state.llm = llm or LLMClient(settings)
         app.state.health = HealthService(app.state.llm, settings.health_cache_s)
         app.state.chat = ChatService(app.state.llm, settings)
+        db = Database(settings.data_dir / "chat.db")
+        db.open()
+        app.state.db = db
+        app.state.conversations = ConversationService(db, app.state.chat, settings)
+        await app.state.conversations.startup()
         try:
             yield
         finally:
             await app.state.llm.aclose()
+            db.close()
 
     app = FastAPI(title="litellm-local-chatbot", version=__version__, lifespan=lifespan)
     app.add_middleware(SecurityHeadersMiddleware)
@@ -41,6 +49,7 @@ def create_app(settings: Settings | None = None, llm: LLMClient | None = None) -
     app.include_router(health.router)
     app.include_router(models.router)
     app.include_router(chat.router)
+    app.include_router(conversations.router)
 
     # Serve the built React app from the same process (one URL on the laptop). Must come last.
     if FRONTEND_DIST.is_dir():
