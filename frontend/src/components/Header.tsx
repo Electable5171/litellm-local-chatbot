@@ -9,6 +9,8 @@ interface Props {
   thinking: boolean
   onThinking: (on: boolean) => void
   onMenu: () => void
+  /** Download link of the open chat as a Markdown file; absent for a chat that is not saved yet. */
+  exportHref?: string
   busy: boolean
 }
 
@@ -26,7 +28,7 @@ function status(server: HealthState): { tone: 'ok' | 'warn' | 'bad' | 'wait'; te
   }
 }
 
-export function Header({ server, models, model, onModel, thinking, onThinking, onMenu, busy }: Props) {
+export function Header({ server, models, model, onModel, thinking, onThinking, onMenu, exportHref, busy }: Props) {
   const state = status(server)
   return (
     <header className="header">
@@ -59,6 +61,11 @@ export function Header({ server, models, model, onModel, thinking, onThinking, o
         />
         <span>Thinking</span>
       </label>
+      {exportHref && (
+        <a className="ghost button" href={exportHref} download>
+          Export
+        </a>
+      )}
     </header>
   )
 }

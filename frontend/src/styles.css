@@ -720,3 +720,35 @@ details.sources ol {
   margin: 6px 0 0;
   padding-left: 22px;
 }
+
+/* Search and export */
+.search {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.conv-title .snippet {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+a.ghost.button {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: inherit;
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+a.ghost.button:hover {
+  background: var(--panel);
+}

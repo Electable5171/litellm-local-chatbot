@@ -80,6 +80,9 @@ export default function App() {
       <Sidebar
         items={conversations.items}
         error={conversations.error}
+        query={conversations.query}
+        shown={conversations.shown}
+        onQuery={conversations.setQuery}
         activeId={routeId}
         busy={chat.busy}
         open={drawer}
@@ -108,6 +111,7 @@ export default function App() {
             remember({ thinking: on })
           }}
           onMenu={() => setDrawer(true)}
+          exportHref={routeId ? `/api/conversations/${encodeURIComponent(routeId)}/export` : undefined}
           busy={chat.busy}
         />
         {chat.loading ? (

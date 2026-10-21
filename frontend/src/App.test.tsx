@@ -140,7 +140,8 @@ function mockServer(
     calls.push({ method, url, body })
     if (url === '/api/health') return Response.json(options.health ?? HEALTH)
     if (url === '/api/models') return Response.json(MODELS)
-    if (url === '/api/conversations') {
+    const [path, queryString] = url.split('?')
+    if (path === '/api/conversations') {
       if (method === 'POST') {
         created += 1
         const made = conversation(`new${created}`, '', {
@@ -149,11 +150,15 @@ function mockServer(
         db.set(made.id, made)
         return Response.json(made, { status: 201 })
       }
+      const q = new URLSearchParams(queryString).get('q')?.toLowerCase()
+      const hits = [...db.values()].flatMap((c) => {
+        if (!q) return [{ ...c, messages: undefined }]
+        const message = c.messages.find((m) => m.content.toLowerCase().includes(q))
+        if (!c.title.toLowerCase().includes(q) && !message) return []
+        return [{ ...c, messages: undefined, snippet: message?.content ?? null }]
+      })
       return Response.json({
-        conversations: [...db.values()].map((c) => ({
-          ...c,
-          messages: undefined,
-        })),
+        conversations: hits,
       })
     }
     if (url === '/api/documents') {
@@ -780,5 +785,58 @@ describe('documents', () => {
     window.location.hash = '#/c/c9'
     render(<App />)
     expect(await screen.findByText('Sources (2) · best matches')).toBeInTheDocument()
+  })
+})
+
+describe('search and export', () => {
+  const sidebar = () => screen.getByRole('navigation', { name: 'Conversations' })
+
+  it('searches chats by text and shows where it matched', async () => {
+    const server = mockServer(() => fullResponse(DONE), {
+      conversations: [
+        conversation('c1', 'Cooking', { messages: [stored('assistant', 'Add the saffron last.')] }),
+        conversation('c2', 'Travel', { messages: [stored('user', 'Where is Lisbon?')] }),
+      ],
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await within(sidebar()).findByText('Cooking')
+
+    await user.type(within(sidebar()).getByRole('searchbox', { name: 'Search chats' }), 'saffron')
+    expect(await within(sidebar()).findByText('Results (1)')).toBeInTheDocument()
+    expect(within(sidebar()).getByText('Add the saffron last.')).toBeInTheDocument()
+    expect(within(sidebar()).queryByText('Travel')).toBeNull()
+    expect(server.calls.some((c) => c.url === '/api/conversations?q=saffron')).toBe(true)
+
+    await user.clear(within(sidebar()).getByRole('searchbox', { name: 'Search chats' }))
+    expect(await within(sidebar()).findByText('Travel')).toBeInTheDocument()
+    expect(within(sidebar()).queryByText(/Results/)).toBeNull()
+
+    await user.type(within(sidebar()).getByRole('searchbox', { name: 'Search chats' }), 'zzz')
+    expect(await within(sidebar()).findByText('No chat contains that text.')).toBeInTheDocument()
+  })
+
+  it('sends one search request after typing stops, not one per key', async () => {
+    const server = mockServer(() => fullResponse(DONE), { conversations: [conversation('c1', 'Cooking')] })
+    const user = userEvent.setup()
+    render(<App />)
+    await within(sidebar()).findByText('Cooking')
+    await user.type(within(sidebar()).getByRole('searchbox', { name: 'Search chats' }), 'cook')
+    await within(sidebar()).findByText('Results (1)')
+    expect(server.calls.filter((c) => c.url.startsWith('/api/conversations?q=')).map((c) => c.url)).toEqual([
+      '/api/conversations?q=cook',
+    ])
+  })
+
+  it('offers a Markdown download for a saved chat only', async () => {
+    mockServer(() => fullResponse(DONE), { conversations: [conversation('c1', 'Saved')] })
+    render(<App />)
+    expect(screen.queryByRole('link', { name: 'Export' })).toBeNull() // a new chat is not saved yet
+
+    window.location.hash = '#/c/c1'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    const link = await screen.findByRole('link', { name: 'Export' })
+    expect(link).toHaveAttribute('href', '/api/conversations/c1/export')
+    expect(link).toHaveAttribute('download')
   })
 })

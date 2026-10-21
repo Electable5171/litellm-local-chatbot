@@ -85,6 +85,22 @@ def message_json(row: repo.Row) -> dict[str, Any]:
     }
 
 
+def make_snippet(text: str, term: str, width: int = 60) -> str:
+    """A short piece of ``text`` around the first occurrence of ``term``."""
+    flat = " ".join(text.split())
+    at = flat.lower().find(term.lower())
+    if at < 0:
+        return flat[: width * 2]
+    start = max(0, at - width)
+    end = min(len(flat), at + len(term) + width)
+    return ("\u2026" if start else "") + flat[start:end] + ("\u2026" if end < len(flat) else "")
+
+
+def _slug(title: str) -> str:
+    slug = "".join(c if c.isascii() and c.isalnum() else "-" for c in title.lower())
+    return "-".join(part for part in slug.split("-") if part)[:50] or "chat"
+
+
 def _sources_json(raw: str | None) -> dict[str, Any] | None:
     try:
         return json.loads(raw) if raw else None
@@ -125,8 +141,50 @@ class ConversationService:
         if count:
             log.warning("marked %d unfinished answer(s) as interrupted", count)
 
-    async def list(self) -> list[dict[str, Any]]:
-        return [conversation_json(r) for r in await self._db.run(repo.list_conversations)]
+    async def list(self, query: str | None = None) -> list[dict[str, Any]]:
+        term = (query or "").strip()
+        if not term:
+            return [conversation_json(r) for r in await self._db.run(repo.list_conversations)]
+        found = await self._db.run(lambda c: repo.search_conversations(c, term))
+        return [
+            {**conversation_json(row), "snippet": make_snippet(text, term) if text else None}
+            for row, text in found
+        ]
+
+    async def export_markdown(self, conversation_id: str, *, thinking: bool) -> tuple[str, str]:
+        """(file name, Markdown text) for a conversation."""
+        data = await self.get(conversation_id)
+        started = data["created_at"][:16].replace("T", " ")
+        lines = [
+            f"# {data['title'] or 'Untitled chat'}",
+            "",
+            f"*Model {data['model']} \u00b7 started {started} UTC*",
+        ]
+        for m in data["messages"]:
+            lines += ["", "## You" if m["role"] == "user" else "## Assistant", ""]
+            if thinking and m["reasoning"]:
+                lines += [
+                    "<details><summary>Thinking</summary>",
+                    "",
+                    m["reasoning"],
+                    "",
+                    "</details>",
+                    "",
+                ]
+            lines.append(m["content"] or "*(no text)*")
+            if m["status"] == "cancelled":
+                lines += ["", "*(stopped)*"]
+            elif m["status"] == "error":
+                lines += ["", f"*(failed: {(m['error'] or {}).get('message', 'error')})*"]
+            used = (m.get("sources") or {}).get("sources") or []
+            if used:
+                names = ", ".join(
+                    f"[{s['n']}] {s['filename']}" + (f" p.{s['page']}" if s["page"] else "")
+                    for s in used
+                )
+                lines += ["", f"*Sources: {names}*"]
+        stamp = data["created_at"][:10]
+        return f"{_slug(data['title'])}-{stamp}.md", "\n".join(lines) + "\n"
 
     async def create(
         self, *, model: str | None, thinking: bool, system_prompt: str = ""

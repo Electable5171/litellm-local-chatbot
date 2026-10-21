@@ -26,6 +26,8 @@ Then open **http://127.0.0.1:8000/**. You can watch the model think, stop an ans
 
 The app listens on `127.0.0.1` only, because it has no login.
 
+**Search and export.** The box above the chat list searches titles and the text of questions and answers (not the model's thinking) and shows where it matched; letter case is ignored for plain English letters only. **Export** (top right, for a saved chat) downloads the conversation as a Markdown file. To include the model's thinking, open `http://127.0.0.1:8000/api/conversations/<id>/export?thinking=true` instead.
+
 ## Chat from the command line
 
 With the app running in one PowerShell window, open a second one:
