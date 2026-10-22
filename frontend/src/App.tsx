@@ -120,12 +120,17 @@ export default function App() {
           </div>
         ) : (
           <>
+            {chat.actionError && (
+              <p className="notice error" role="alert">
+                {chat.actionError}
+              </p>
+            )}
             {chat.loadError && (
               <p className="notice error" role="alert">
                 Could not open this chat: {chat.loadError}
               </p>
             )}
-            <MessageList messages={chat.messages} onRetry={chat.retry} />
+            <MessageList messages={chat.messages} busy={chat.busy} onRetry={chat.retry} onEdit={chat.edit} />
           </>
         )}
         <Composer

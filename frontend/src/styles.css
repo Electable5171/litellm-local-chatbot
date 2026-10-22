@@ -752,3 +752,50 @@ a.ghost.button {
 a.ghost.button:hover {
   background: var(--panel);
 }
+
+/* Editing a message */
+.msg.user {
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.msg.user .edit-button {
+  margin-top: 2px;
+  opacity: 0;
+}
+
+.msg.user:hover .edit-button,
+.msg.user .edit-button:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .msg.user .edit-button {
+    opacity: 1;
+  }
+}
+
+.msg.user.editing {
+  align-items: stretch;
+  gap: 6px;
+}
+
+.msg.user.editing textarea {
+  width: 100%;
+  padding: 10px 14px;
+  resize: vertical;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--bg);
+}
+
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.edit-actions .send {
+  background: var(--accent);
+  color: var(--accent-fg);
+}

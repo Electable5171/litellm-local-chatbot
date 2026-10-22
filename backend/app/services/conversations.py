@@ -316,12 +316,27 @@ class ConversationService:
             raise ApiError("invalid_messages", "The message is too long.", 400)
         return await self._turn(conversation_id, content, regenerate=False)
 
+    async def edit(
+        self, conversation_id: str, message_id: str, content: str
+    ) -> tuple[dict[str, Any], AsyncIterator[Event]]:
+        """Replace one of the user's messages and everything after it, then answer the new text."""
+        if not content.strip():
+            raise ApiError("invalid_messages", "The message is empty.", 400)
+        if len(content) > MAX_MESSAGE_CHARS:
+            raise ApiError("invalid_messages", "The message is too long.", 400)
+        return await self._turn(conversation_id, content, regenerate=False, edit_id=message_id)
+
     async def regenerate(self, conversation_id: str) -> tuple[dict[str, Any], AsyncIterator[Event]]:
         """Answer the last question again, replacing the last answer."""
         return await self._turn(conversation_id, None, regenerate=True)
 
     async def _turn(
-        self, conversation_id: str, content: str | None, *, regenerate: bool
+        self,
+        conversation_id: str,
+        content: str | None,
+        *,
+        regenerate: bool,
+        edit_id: str | None = None,
     ) -> tuple[dict[str, Any], AsyncIterator[Event]]:
         def load(conn):
             conv = repo.get_conversation(conn, conversation_id)
@@ -338,6 +353,8 @@ class ConversationService:
             await self._db.run(repo.mark_interrupted)
             messages = [{**m, "status": "error"} if m["id"] == last["id"] else m for m in messages]
 
+        cut: int | None = None  # with an edit: the position of the message that is replaced
+        first_edited = False
         if regenerate:
             if not messages or messages[-1]["role"] != "assistant":
                 raise ApiError("invalid_messages", "There is no answer to regenerate.", 409)
@@ -345,6 +362,16 @@ class ConversationService:
             if not messages or messages[-1]["role"] != "user":
                 raise ApiError("invalid_messages", "There is no question to answer.", 409)
             history = _history(messages)
+        elif edit_id is not None:
+            index = next((i for i, m in enumerate(messages) if m["id"] == edit_id), None)
+            if index is None:
+                raise ApiError("message_not_found", "That message does not exist.", 404)
+            if messages[index]["role"] != "user":
+                raise ApiError("invalid_messages", "Only your own messages can be edited.", 400)
+            cut = messages[index]["position"]
+            first_edited = index == 0
+            history = _history(messages[:index]) + [{"role": "user", "content": content or ""}]
+            drop = None
         else:
             history = _history(messages) + [{"role": "user", "content": content or ""}]
             drop = None
@@ -376,13 +403,16 @@ class ConversationService:
                     repo.delete_message(conn, drop["id"])
                     user_row = messages[-1]
                 else:
+                    if cut is not None:
+                        repo.delete_messages_from(conn, conversation_id, cut)
                     user_row = repo.add_message(
                         conn, conversation_id, "user", content=content or ""
                     )
                 reply = repo.add_message(conn, conversation_id, "assistant", status="streaming")
                 if sources is not None:
                     repo.update_message(conn, reply["id"], sources=json.dumps(sources))
-                if conv["title"]:
+                redraft = first_edited and conv["title_source"] == "draft"
+                if conv["title"] and not redraft:
                     repo.update_conversation(conn, conversation_id, touch=True)
                 else:  # a draft title; the model may write a better one after the first answer
                     repo.update_conversation(

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { MessageError, UiMessage } from '../state/chatReducer'
 import { Markdown, useCopy } from './Markdown'
 import { ThinkingBlock } from './ThinkingBlock'
@@ -69,15 +70,72 @@ interface Props {
   message: UiMessage
   isLast: boolean
   onRetry: () => void
+  /** Present when the message can be edited now (saved, and no answer is being written). */
+  onEdit?: (text: string) => void
+  /** How many messages follow this one; they are replaced when it is edited. */
+  laterCount?: number
 }
 
-export function MessageView({ message, isLast, onRetry }: Props) {
-  if (message.role === 'user') {
+function UserMessage({ message, onEdit, laterCount = 0 }: Pick<Props, 'message' | 'onEdit' | 'laterCount'>) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(message.content)
+
+  if (editing && onEdit) {
+    const changed = draft.trim() !== '' && draft.trim() !== message.content.trim()
     return (
-      <article className="msg user">
-        <div className="bubble">{message.content}</div>
+      <article className="msg user editing">
+        <textarea
+          aria-label="Edit message"
+          value={draft}
+          rows={Math.min(10, Math.max(2, draft.split('\n').length))}
+          autoFocus
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <p className="note">
+          Saving removes {laterCount === 1 ? 'the 1 message' : `the ${laterCount} messages`} after this one and
+          writes a new answer.
+        </p>
+        <div className="edit-actions">
+          <button
+            type="button"
+            className="send"
+            disabled={!changed}
+            onClick={() => {
+              setEditing(false)
+              onEdit(draft)
+            }}
+          >
+            Save and answer
+          </button>
+          <button type="button" className="ghost" onClick={() => setEditing(false)}>
+            Cancel
+          </button>
+        </div>
       </article>
     )
+  }
+  return (
+    <article className="msg user">
+      <div className="bubble">{message.content}</div>
+      {onEdit && (
+        <button
+          type="button"
+          className="ghost small edit-button"
+          onClick={() => {
+            setDraft(message.content)
+            setEditing(true)
+          }}
+        >
+          Edit
+        </button>
+      )}
+    </article>
+  )
+}
+
+export function MessageView({ message, isLast, onRetry, onEdit, laterCount }: Props) {
+  if (message.role === 'user') {
+    return <UserMessage message={message} onEdit={onEdit} laterCount={laterCount} />
   }
   const streaming = message.status === 'streaming'
   const thinking = streaming && message.content === ''

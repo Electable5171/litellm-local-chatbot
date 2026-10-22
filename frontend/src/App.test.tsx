@@ -96,8 +96,9 @@ function stored(role: 'user' | 'assistant', content: string, extra: Partial<Stor
 }
 
 interface Turn {
-  kind: 'message' | 'regenerate'
+  kind: 'message' | 'regenerate' | 'edit'
   conversationId: string
+  messageId?: string
   content?: string
   init: RequestInit
 }
@@ -200,6 +201,16 @@ function mockServer(
         documents: list.map((d) => docs.get(d)).filter(Boolean),
       })
     }
+    const editMatch = /^\/api\/conversations\/([^/]+)\/messages\/([^/]+)\/edit$/.exec(url)
+    if (editMatch) {
+      return turn({
+        kind: 'edit',
+        conversationId: decodeURIComponent(editMatch[1]!),
+        messageId: decodeURIComponent(editMatch[2]!),
+        content: body?.content as string | undefined,
+        init,
+      })
+    }
     const match = /^\/api\/conversations\/([^/]+)(\/messages|\/regenerate)?$/.exec(url)
     if (match) {
       const id = decodeURIComponent(match[1]!)
@@ -230,7 +241,7 @@ function mockServer(
 }
 
 const turnCalls = (server: ReturnType<typeof mockServer>) =>
-  server.calls.filter((c) => c.method === 'POST' && /\/(messages|regenerate)$/.test(c.url))
+  server.calls.filter((c) => c.method === 'POST' && /\/(messages|regenerate|edit)$/.test(c.url))
 
 const box = () => screen.getByRole('textbox', { name: 'Message' })
 
@@ -860,5 +871,117 @@ describe('chat titles', () => {
       await vi.advanceTimersByTimeAsync(3100)
     })
     expect(await within(nav).findByText('Capital of France')).toBeInTheDocument()
+  })
+})
+
+describe('editing a message', () => {
+  const twoTurns = () =>
+    conversation('c1', 'Chat', {
+      messages: [
+        stored('user', 'first question'),
+        stored('assistant', 'first answer'),
+        stored('user', 'second question'),
+        stored('assistant', 'second answer'),
+      ],
+    })
+
+  it('replaces the message and everything after it with a new answer', async () => {
+    const server = mockServer(({ kind, content }) =>
+      kind === 'edit'
+        ? fullResponse(
+            frame('meta', { model: 'qwen3.8', thinking: true, trimmed_messages: 0, user_message_id: 'srv-new' }),
+            frame('content', { delta: `answer to: ${content}` }),
+            DONE,
+          )
+        : fullResponse(DONE),
+      { conversations: [twoTurns()] },
+    )
+    window.location.hash = '#/c/c1'
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('second answer')
+
+    const log = screen.getByRole('log')
+    await user.click(within(log).getAllByRole('button', { name: 'Edit' })[1]!) // the second question
+    expect(screen.getByText('Saving removes the 1 message after this one and writes a new answer.')).toBeInTheDocument()
+    const box1 = screen.getByRole('textbox', { name: 'Edit message' })
+    await user.clear(box1)
+    await user.type(box1, 'a better second question')
+    await user.click(screen.getByRole('button', { name: 'Save and answer' }))
+
+    expect(await within(log).findByText('answer to: a better second question')).toBeInTheDocument()
+    expect(within(log).queryByText('second answer')).toBeNull()
+    expect(within(log).queryByText('second question')).toBeNull()
+    expect(within(log).getByText('first answer')).toBeInTheDocument()
+    const call = turnCalls(server).at(-1)!
+    expect(call.url).toBe(`/api/conversations/c1/messages/s-second%20question/edit`)
+    expect(call.body).toEqual({ content: 'a better second question' })
+  })
+
+  it('warns how many messages go, and Cancel changes nothing', async () => {
+    const server = mockServer(() => fullResponse(DONE), { conversations: [twoTurns()] })
+    window.location.hash = '#/c/c1'
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('second answer')
+    await user.click(within(screen.getByRole('log')).getAllByRole('button', { name: 'Edit' })[0]!)
+    expect(screen.getByText('Saving removes the 3 messages after this one and writes a new answer.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save and answer' })).toBeDisabled() // not changed yet
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByText('second answer')).toBeInTheDocument()
+    expect(turnCalls(server)).toHaveLength(0)
+  })
+
+  it('shows what the server still has when it refuses the edit', async () => {
+    mockServer(
+      ({ kind }) =>
+        kind === 'edit'
+          ? Response.json({ error: { code: 'conversation_busy', message: 'An answer is still being written.' } }, { status: 409 })
+          : fullResponse(DONE),
+      { conversations: [twoTurns()] },
+    )
+    window.location.hash = '#/c/c1'
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('second answer')
+    await user.click(within(screen.getByRole('log')).getAllByRole('button', { name: 'Edit' })[0]!)
+    const box1 = screen.getByRole('textbox', { name: 'Edit message' })
+    await user.clear(box1)
+    await user.type(box1, 'changed')
+    await user.click(screen.getByRole('button', { name: 'Save and answer' }))
+
+    expect(await screen.findByText('An answer is still being written.')).toBeInTheDocument()
+    expect(await screen.findByText('second answer')).toBeInTheDocument() // nothing was lost on screen
+    expect(screen.getByText('first question')).toBeInTheDocument()
+  })
+
+  it('offers Edit only for saved messages and not while an answer is being written', async () => {
+    const live = liveStream()
+    mockServer(() => live.response, { conversations: [twoTurns()] })
+    window.location.hash = '#/c/c1'
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('second answer')
+    expect(within(screen.getByRole('log')).getAllByRole('button', { name: 'Edit' })).toHaveLength(2)
+
+    await user.type(box(), 'third{Enter}')
+    live.push(META + frame('content', { delta: 'part' }))
+    await screen.findByText('part')
+    expect(within(screen.getByRole('log')).queryByRole('button', { name: 'Edit' })).toBeNull()
+  })
+
+  it('a message just sent can be edited once the server has stored it', async () => {
+    mockServer(() =>
+      fullResponse(
+        frame('meta', { model: 'qwen3.8', thinking: true, trimmed_messages: 0, user_message_id: 'srv-1' }),
+        frame('content', { delta: 'hi' }),
+        DONE,
+      ),
+    )
+    const user = userEvent.setup()
+    render(<App />)
+    await user.type(box(), 'hello{Enter}')
+    await screen.findByText('hi')
+    expect(await within(screen.getByRole('log')).findByRole('button', { name: 'Edit' })).toBeInTheDocument()
   })
 })

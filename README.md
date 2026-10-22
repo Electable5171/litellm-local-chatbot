@@ -26,6 +26,8 @@ Then open **http://127.0.0.1:8000/**. You can watch the model think, stop an ans
 
 The app listens on `127.0.0.1` only, because it has no login.
 
+**Edit a message.** Point at one of your messages and click **Edit**. Saving replaces that message and everything after it with a new answer to the new text. The later messages are deleted, not kept as another version, which is why the box tells you how many will go. Edit is not offered while an answer is being written, and a refused edit changes nothing.
+
 **Titles.** A new chat is first named after your question. After the first answer is complete, the model writes a short title (thinking off, one short request, never while another answer is being written); if that fails or the model is busy, the question stays as the title. A title you typed yourself is never replaced, and chats created before this feature keep their titles. Set `AUTO_TITLES=false` in `backend\.env` to turn this off.
 
 **Search and export.** The box above the chat list searches titles and the text of questions and answers (not the model's thinking) and shows where it matched; letter case is ignored for plain English letters only. **Export** (top right, for a saved chat) downloads the conversation as a Markdown file. To include the model's thinking, open `http://127.0.0.1:8000/api/conversations/<id>/export?thinking=true` instead.

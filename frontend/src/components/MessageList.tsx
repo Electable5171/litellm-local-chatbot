@@ -4,10 +4,12 @@ import { MessageView } from './MessageView'
 
 interface Props {
   messages: UiMessage[]
+  busy: boolean
   onRetry: () => void
+  onEdit: (serverId: string, text: string) => void
 }
 
-export function MessageList({ messages, onRetry }: Props) {
+export function MessageList({ messages, busy, onRetry, onEdit }: Props) {
   const scroller = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
 
@@ -42,6 +44,12 @@ export function MessageList({ messages, onRetry }: Props) {
             message={message}
             isLast={index === messages.length - 1}
             onRetry={onRetry}
+            laterCount={messages.length - index - 1}
+            onEdit={
+              message.role === 'user' && message.serverId && !busy
+                ? (text) => onEdit(message.serverId!, text)
+                : undefined
+            }
           />
         ))}
       </div>

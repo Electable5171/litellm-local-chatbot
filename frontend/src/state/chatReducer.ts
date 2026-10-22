@@ -17,6 +17,8 @@ export interface MessageStats {
 
 export interface UiMessage {
   id: string
+  /** The id the server gave this message (known once it is saved); needed to edit it. */
+  serverId?: string
   role: 'user' | 'assistant'
   content: string
   reasoning: string
@@ -46,6 +48,7 @@ export type ChatAction =
   | { type: 'events'; events: ChatEvent[]; now: number }
   | { type: 'fail'; error: MessageError; now: number }
   | { type: 'stop'; now: number }
+  | { type: 'edit'; index: number; userId: string; assistantId: string; text: string; now: number }
   | { type: 'dropLastAssistant' }
   | { type: 'dropLastTurn' }
   | { type: 'load'; messages: UiMessage[] }
@@ -119,10 +122,37 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
     case 'restart':
       return { messages: [...state.messages, newAssistant(action.assistantId, action.now)] }
-    case 'events':
-      return updateStreaming(state, (m) =>
+    case 'events': {
+      const next = updateStreaming(state, (m) =>
         action.events.reduce((message, event) => applyEvent(message, event, action.now), m),
       )
+      // The first event tells which id the server gave the question that was just sent.
+      const meta = action.events.find((e) => e.type === 'meta')
+      const question = next.messages.at(-2)
+      if (meta?.type === 'meta' && meta.user_message_id && question?.role === 'user') {
+        return {
+          messages: [...next.messages.slice(0, -2), { ...question, serverId: meta.user_message_id }, next.messages.at(-1)!],
+        }
+      }
+      return next
+    }
+    case 'edit':
+      return {
+        messages: [
+          ...state.messages.slice(0, action.index),
+          {
+            id: action.userId,
+            role: 'user',
+            content: action.text,
+            reasoning: '',
+            status: 'done',
+            startedAt: action.now,
+            trimmed: 0,
+            saved: false,
+          },
+          newAssistant(action.assistantId, action.now),
+        ],
+      }
     case 'fail':
       return updateStreaming(state, (m) => ({
         ...withThinkingTime(m, action.now),
@@ -168,6 +198,7 @@ export function fromStored(m: StoredMessage): UiMessage {
   const hasStats = m.latency_ms !== null || m.usage !== null
   return {
     id: m.id,
+    serverId: m.id,
     role: m.role,
     content: m.content,
     reasoning: m.reasoning,

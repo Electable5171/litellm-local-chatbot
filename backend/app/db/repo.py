@@ -227,6 +227,15 @@ def delete_message(conn: sqlite3.Connection, message_id: str) -> None:
     conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
 
 
+def delete_messages_from(conn: sqlite3.Connection, conversation_id: str, position: int) -> int:
+    """Delete the message at ``position`` and every later one. Returns how many were removed."""
+    cursor = conn.execute(
+        "DELETE FROM messages WHERE conversation_id = ? AND position >= ?",
+        (conversation_id, position),
+    )
+    return cursor.rowcount
+
+
 def mark_interrupted(conn: sqlite3.Connection) -> int:
     """After a crash or power loss: answers left in 'streaming' become visible errors."""
     cursor = conn.execute(
