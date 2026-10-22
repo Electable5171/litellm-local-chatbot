@@ -799,3 +799,133 @@ a.ghost.button:hover {
   background: var(--accent);
   color: var(--accent-fg);
 }
+
+/* Usage page */
+.usage-link {
+  margin-top: auto;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.usage-link[aria-current='page'] {
+  background: var(--bg);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.usage-link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.range {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.range button[aria-pressed='true'] {
+  background: var(--bg);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.stats-body {
+  flex: 1;
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.stat-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.stat-card dt {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.stat-card dd {
+  margin: 2px 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.stat-card small {
+  color: var(--muted);
+}
+
+.stat-chart {
+  margin: 18px 0;
+}
+
+.stat-chart figcaption,
+.slowest h2 {
+  margin-bottom: 6px;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 120px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.bar {
+  flex: 1;
+  max-width: 48px;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+}
+
+.bar-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.slowest ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.slowest li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.slowest li > span {
+  font-size: 0.85rem;
+  color: var(--muted);
+}

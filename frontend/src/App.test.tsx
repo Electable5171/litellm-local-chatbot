@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
-import type { ConversationWithMessages, DocumentInfo, Health, ModelsResponse, StoredMessage } from './api/types'
+import type { ConversationWithMessages, DocumentInfo, StatsResponse, Health, ModelsResponse, StoredMessage } from './api/types'
 
 const encoder = new TextEncoder()
 
@@ -104,6 +104,29 @@ interface Turn {
 }
 type TurnHandler = (turn: Turn) => Response | Promise<Response>
 
+const path0 = (url: string) => url.split('?')[0]
+
+const SUMMARY = { count: 4, avg: 5000, p50: 4000, p95: 9000, max: 9500 }
+const STATS: StatsResponse = {
+  range: '7d',
+  since: null,
+  answers: { complete: 42, stopped: 3, failed: 1 },
+  tokens: { prompt: 123456, completion: 7890 },
+  latency_ms: SUMMARY,
+  ttft_ms: { count: 4, avg: 800, p50: 700, p95: 1500, max: 1600 },
+  thinking_ms: { count: 40, avg: 6200, p50: 6000, p95: 9000, max: 9500 },
+  tokens_per_second: 51.3,
+  conversations: 12,
+  per_day: [
+    { date: '2026-10-20', answers: 5, completion_tokens: 900 },
+    { date: '2026-10-21', answers: 0, completion_tokens: 0 },
+    { date: '2026-10-22', answers: 10, completion_tokens: 2000 },
+  ],
+  slowest: [
+    { message_id: 'm1', conversation_id: 'c9', title: 'Long analysis', latency_ms: 31000, completion_tokens: 1800, created_at: '2026-10-22T10:00:00.000+00:00' },
+  ],
+}
+
 function documentInfo(id: string, filename: string, extra: Partial<DocumentInfo> = {}): DocumentInfo {
   return {
     id,
@@ -127,6 +150,7 @@ function mockServer(
     health?: Health
     conversations?: ConversationWithMessages[]
     documents?: DocumentInfo[]
+    stats?: (range: string) => Response | StatsResponse
   } = {},
 ) {
   const db = new Map((options.conversations ?? []).map((c) => [c.id, c]))
@@ -140,6 +164,10 @@ function mockServer(
     const body = typeof init.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : undefined
     calls.push({ method, url, body })
     if (url === '/api/health') return Response.json(options.health ?? HEALTH)
+    if (path0(url) === '/api/stats') {
+      const result = options.stats?.(new URLSearchParams(url.split('?')[1]).get('range') ?? '')
+      return result instanceof Response ? result : Response.json(result ?? STATS)
+    }
     if (url === '/api/models') return Response.json(MODELS)
     const [path, queryString] = url.split('?')
     if (path === '/api/conversations') {
@@ -983,5 +1011,96 @@ describe('editing a message', () => {
     await user.type(box(), 'hello{Enter}')
     await screen.findByText('hi')
     expect(await within(screen.getByRole('log')).findByRole('button', { name: 'Edit' })).toBeInTheDocument()
+  })
+})
+
+describe('usage page', () => {
+  it('shows the figures, the chart and the slowest answers, and opens a chat from the list', async () => {
+    const server = mockServer(() => fullResponse(DONE), { conversations: [conversation('c9', 'Long analysis')] })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Usage' }))
+
+    expect(window.location.hash).toBe('#/stats')
+    expect(await screen.findByRole('heading', { name: 'Usage' })).toBeInTheDocument()
+    expect(screen.getByText('42')).toBeInTheDocument()
+    expect(screen.getByText('12 chats · 3 stopped · 1 failed')).toBeInTheDocument()
+    expect(screen.getByText('7,890')).toBeInTheDocument()
+    expect(screen.getByText('123,456')).toBeInTheDocument()
+    expect(screen.getAllByText('5.0 s').length).toBeGreaterThan(0) // average response time
+    expect(screen.getByText('51.3 tokens/s')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: /Answers per day: 15 in 3 days/ })).toBeInTheDocument()
+    const request = server.calls.find((c) => c.url.startsWith('/api/stats'))!
+    expect(request.url).toMatch(/^\/api\/stats\?range=7d&tz=-?\d+$/)
+
+    const slowest = screen.getByRole('heading', { name: 'Slowest answers' }).closest('section')!
+    await user.click(within(slowest).getByRole('button', { name: 'Long analysis' }))
+    expect(window.location.hash).toBe('#/c/c9')
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
+  })
+
+  it('asks again for another time range', async () => {
+    const asked: string[] = []
+    mockServer(() => fullResponse(DONE), {
+      stats: (range) => {
+        asked.push(range)
+        return { ...STATS, range: range as StatsResponse['range'], answers: { complete: range === 'today' ? 7 : 42, stopped: 0, failed: 0 } }
+      },
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Usage' }))
+    await screen.findByText('42')
+    await user.click(screen.getByRole('button', { name: 'Today' }))
+    expect(await screen.findByText('7')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Today' })).toHaveAttribute('aria-pressed', 'true')
+    expect(asked).toEqual(['7d', 'today'])
+  })
+
+  it('says so when there are no answers yet', async () => {
+    mockServer(() => fullResponse(DONE), {
+      stats: () => ({
+        ...STATS,
+        answers: { complete: 0, stopped: 0, failed: 0 },
+        latency_ms: { count: 0, avg: null, p50: null, p95: null, max: null },
+        slowest: [],
+      }),
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Usage' }))
+    expect(await screen.findByText('No answers in this range yet.')).toBeInTheDocument()
+  })
+
+  it('shows a failure to load the figures', async () => {
+    mockServer(() => fullResponse(DONE), {
+      stats: () => Response.json({ error: { code: 'x', message: 'The database is locked.' } }, { status: 500 }),
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: 'Usage' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('The database is locked.')
+  })
+
+  it('opens from the address and goes back to the chat', async () => {
+    mockServer(() => fullResponse(DONE))
+    window.location.hash = '#/stats'
+    const user = userEvent.setup()
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: 'Usage' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Back to chat/ }))
+    expect(window.location.hash).toBe('#/')
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
+  })
+
+  it('cannot be opened while an answer is being written', async () => {
+    const live = liveStream()
+    mockServer(() => live.response)
+    const user = userEvent.setup()
+    render(<App />)
+    await user.type(box(), 'working{Enter}')
+    live.push(META + frame('content', { delta: 'part' }))
+    await screen.findByText('part')
+    expect(screen.getByRole('button', { name: 'Usage' })).toBeDisabled()
   })
 })

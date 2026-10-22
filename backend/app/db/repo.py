@@ -244,3 +244,20 @@ def mark_interrupted(conn: sqlite3.Connection) -> int:
         " WHERE status = 'streaming'"
     )
     return cursor.rowcount
+
+
+def answers_since(conn: sqlite3.Connection, since: str | None) -> list[Row]:
+    """The assistant messages created since an ISO UTC time (all of them when None)."""
+    sql = (
+        "SELECT m.id, m.conversation_id, c.title, m.status, m.prompt_tokens, m.completion_tokens,"
+        " m.latency_ms, m.ttft_ms, m.thinking_ms, m.created_at"
+        " FROM messages m JOIN conversations c ON c.id = m.conversation_id"
+        " WHERE m.role = 'assistant'"
+    )
+    if since is None:
+        rows = conn.execute(sql + " ORDER BY m.created_at").fetchall()
+    else:
+        rows = conn.execute(
+            sql + " AND m.created_at >= ? ORDER BY m.created_at", (since,)
+        ).fetchall()
+    return [dict(r) for r in rows]

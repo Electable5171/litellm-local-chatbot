@@ -13,6 +13,9 @@ interface Props {
   open: boolean
   onClose: () => void
   onNew: () => void
+  /** Open the usage page. */
+  onUsage: () => void
+  usageActive: boolean
   onSelect: (id: string) => void
   onRename: (id: string, title: string) => void
   onDelete: (id: string) => void
@@ -153,6 +156,8 @@ export function Sidebar({
   open,
   onClose,
   onNew,
+  onUsage,
+  usageActive,
   onSelect,
   onRename,
   onDelete,
@@ -203,6 +208,15 @@ export function Sidebar({
               </ul>
             </section>
           ))}
+        <button
+          type="button"
+          className="usage-link"
+          aria-current={usageActive ? 'page' : undefined}
+          onClick={onUsage}
+          disabled={busy}
+        >
+          Usage
+        </button>
       </nav>
     </>
   )
