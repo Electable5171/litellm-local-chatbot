@@ -64,10 +64,15 @@ class DocumentService:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def wait_idle(self) -> None:
-        """Wait until all background work is done (used by tests)."""
+    async def wait_idle(self, limit_s: float = 20.0) -> None:
+        """Wait until all background work is done (used by tests); see ConversationService."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + limit_s
         while self._tasks:
-            await asyncio.gather(*list(self._tasks.values()), return_exceptions=True)
+            if loop.time() > deadline:
+                stuck = "; ".join(repr(t) for t in self._tasks.values())
+                raise RuntimeError(f"document task still running after {limit_s} s: {stuck}")
+            await asyncio.sleep(0.01)
 
     # -- API ---------------------------------------------------------------------------------
 

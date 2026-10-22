@@ -170,10 +170,19 @@ class ConversationService:
             task.cancel()
         await asyncio.gather(*self._title_tasks, return_exceptions=True)
 
-    async def wait_idle(self) -> None:
-        """Wait for background title writing to finish (used by tests)."""
+    async def wait_idle(self, limit_s: float = 20.0) -> None:
+        """Wait for background title writing to finish (used by tests).
+
+        Polls instead of gathering the tasks, and gives up with a description of what is still
+        running, so a stuck task fails a test with an explanation instead of hanging it.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + limit_s
         while self._title_tasks:
-            await asyncio.gather(*list(self._title_tasks), return_exceptions=True)
+            if loop.time() > deadline:
+                stuck = "; ".join(repr(t) for t in self._title_tasks)
+                raise RuntimeError(f"title task still running after {limit_s} s: {stuck}")
+            await asyncio.sleep(0.01)
 
     async def list(self, query: str | None = None) -> list[dict[str, Any]]:
         term = (query or "").strip()
