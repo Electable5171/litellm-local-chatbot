@@ -1,3 +1,4 @@
+import os
 import time
 
 from fastapi import APIRouter, Request
@@ -16,6 +17,7 @@ async def health(request: Request) -> dict[str, object]:
     return {
         "status": "ok" if ok else "degraded",
         "version": __version__,
+        "pid": os.getpid(),  # lets the stop script be sure which process is this app
         "litellm": {
             "base_url": settings.litellm_base_url,
             "reachable": probe.reachable,

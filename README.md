@@ -36,6 +36,28 @@ The app listens on `127.0.0.1` only, because it has no login.
 
 **Search and export.** The box above the chat list searches titles and the text of questions and answers (not the model's thinking) and shows where it matched; letter case is ignored for plain English letters only. **Export** (top right, for a saved chat) downloads the conversation as a Markdown file. To include the model's thinking, open `http://127.0.0.1:8000/api/conversations/<id>/export?thinking=true` instead.
 
+## Run it in the background (no terminal window)
+
+You do not have to keep a terminal open. Install once with `.\scripts\run.cmd` as above (stop it with Ctrl+C), then:
+
+```powershell
+.\scripts\start.cmd          # start in the background; does nothing if it already runs
+.\scripts\status.cmd         # is it running? is LiteLLM reachable?
+.\scripts\open.cmd           # start it if needed, then open the browser
+.\scripts\stop.cmd
+.\scripts\logs.cmd           # the end of the log (-Lines 100 for more)
+.\scripts\shortcuts.cmd -Install   # start at login + a "Local Chat" desktop shortcut
+.\scripts\shortcuts.cmd -Remove    # take both away again (-Status shows what is installed)
+```
+
+Closing the terminal does not stop it. The shortcuts need no admin rights and only create two files in your own Startup and Desktop folders. If the app is not running when you log in, `.\scripts\status.cmd` says so; there is no automatic restart after a crash, so run `.\scripts\start.cmd` again and look at `.\scripts\logs.cmd`. Logs are in `backend\data\logs\` (the logging is in `app.err.log`) and are moved aside when they pass 5 MB.
+
+**Updating:** `.\scripts\stop.cmd`, `git pull`, `.\scripts\build-ui.cmd`, then `.\scripts\run.cmd -Background` (it checks the dependencies and restarts the app in the background; an older database is backed up first). Only the UI or only code changed and nothing else? `.\scripts\start.cmd -Restart` is enough.
+
+**Security note:** the app has no login and listens on this computer only. Running it all day means anyone who can use your Windows session can use it too, so lock your screen when you leave.
+
+**Why not Docker?** On this laptop Docker's default network (`172.17.0.0/16`) contains the LiteLLM address (`172.17.58.139`), Docker Desktop would have to be running instead of a terminal, and it needs a company licence. See the architecture document (decision 12).
+
 ## Chat from the command line
 
 With the app running in one PowerShell window, open a second one:
