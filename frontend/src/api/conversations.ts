@@ -23,7 +23,7 @@ export const listConversations = async (query = '', signal?: AbortSignal) =>
     )
   ).conversations
 
-export const createConversation = (body: { model?: string; thinking: boolean }) =>
+export const createConversation = (body: { model?: string; thinking: boolean; system_prompt?: string }) =>
   request<Conversation>('/api/conversations', json('POST', body))
 
 export const getConversation = (id: string, signal?: AbortSignal) =>
@@ -31,7 +31,7 @@ export const getConversation = (id: string, signal?: AbortSignal) =>
 
 export const updateConversation = (
   id: string,
-  body: { title?: string; model?: string; thinking?: boolean },
+  body: { title?: string; model?: string; thinking?: boolean; system_prompt?: string },
 ) => request<Conversation>(url(id), json('PATCH', body))
 
 export const deleteConversation = (id: string) => request<void>(url(id), { method: 'DELETE' })

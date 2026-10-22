@@ -261,3 +261,42 @@ def answers_since(conn: sqlite3.Connection, since: str | None) -> list[Row]:
             sql + " AND m.created_at >= ? ORDER BY m.created_at", (since,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# -- prompt presets ----------------------------------------------------------------------------
+
+
+def list_presets(conn: sqlite3.Connection) -> list[Row]:
+    rows = conn.execute("SELECT * FROM prompt_presets ORDER BY created_at, id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_preset(conn: sqlite3.Connection, preset_id: str) -> Row | None:
+    return _row(conn.execute("SELECT * FROM prompt_presets WHERE id = ?", (preset_id,)).fetchone())
+
+
+def create_preset(conn: sqlite3.Connection, name: str, content: str) -> Row:
+    preset_id, stamp = new_id(), now()
+    conn.execute(
+        "INSERT INTO prompt_presets (id, name, content, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (preset_id, name, content, stamp, stamp),
+    )
+    return get_preset(conn, preset_id) or {}
+
+
+def update_preset(
+    conn: sqlite3.Connection, preset_id: str, *, name: str | None, content: str | None
+) -> Row | None:
+    if get_preset(conn, preset_id) is None:
+        return None
+    conn.execute(
+        "UPDATE prompt_presets SET name = COALESCE(?, name), content = COALESCE(?, content),"
+        " updated_at = ? WHERE id = ?",
+        (name, content, now(), preset_id),
+    )
+    return get_preset(conn, preset_id)
+
+
+def delete_preset(conn: sqlite3.Connection, preset_id: str) -> bool:
+    return conn.execute("DELETE FROM prompt_presets WHERE id = ?", (preset_id,)).rowcount > 0

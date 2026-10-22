@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
-import type { ConversationWithMessages, DocumentInfo, StatsResponse, Health, ModelsResponse, StoredMessage } from './api/types'
+import type { ConversationWithMessages, DocumentInfo, Preset, StatsResponse, Health, ModelsResponse, StoredMessage } from './api/types'
 
 const encoder = new TextEncoder()
 
@@ -150,11 +150,13 @@ function mockServer(
     health?: Health
     conversations?: ConversationWithMessages[]
     documents?: DocumentInfo[]
+    presets?: Preset[]
     stats?: (range: string) => Response | StatsResponse
   } = {},
 ) {
   const db = new Map((options.conversations ?? []).map((c) => [c.id, c]))
   const docs = new Map((options.documents ?? []).map((d) => [d.id, d]))
+  const presetList = [...(options.presets ?? [])]
   const attached = new Map<string, string[]>()
   let created = 0
   const calls: { method: string; url: string; body?: unknown }[] = []
@@ -164,6 +166,25 @@ function mockServer(
     const body = typeof init.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : undefined
     calls.push({ method, url, body })
     if (url === '/api/health') return Response.json(options.health ?? HEALTH)
+    if (path0(url) === '/api/presets') {
+      if (method === 'POST') {
+        const made = { id: `p${presetList.length + 1}`, name: String(body?.name), content: String(body?.content), created_at: stamp(), updated_at: stamp() }
+        presetList.push(made)
+        return Response.json(made, { status: 201 })
+      }
+      return Response.json({ presets: presetList })
+    }
+    const presetMatch = /^\/api\/presets\/([^/]+)$/.exec(url)
+    if (presetMatch) {
+      const at = presetList.findIndex((p) => p.id === presetMatch[1])
+      if (at < 0) return Response.json({ error: { code: 'preset_not_found', message: 'gone' } }, { status: 404 })
+      if (method === 'DELETE') {
+        presetList.splice(at, 1)
+        return new Response(null, { status: 204 })
+      }
+      Object.assign(presetList[at]!, body)
+      return Response.json(presetList[at])
+    }
     if (path0(url) === '/api/stats') {
       const result = options.stats?.(new URLSearchParams(url.split('?')[1]).get('range') ?? '')
       return result instanceof Response ? result : Response.json(result ?? STATS)
@@ -175,6 +196,7 @@ function mockServer(
         created += 1
         const made = conversation(`new${created}`, '', {
           thinking: body?.thinking !== false,
+          system_prompt: typeof body?.system_prompt === 'string' ? body.system_prompt : '',
         })
         db.set(made.id, made)
         return Response.json(made, { status: 201 })
@@ -265,7 +287,7 @@ function mockServer(
     throw new Error(`unexpected request to ${method} ${url}`)
   })
   vi.stubGlobal('fetch', mock)
-  return { mock, calls, db, docs, attached }
+  return { mock, calls, db, docs, attached, presets: presetList }
 }
 
 const turnCalls = (server: ReturnType<typeof mockServer>) =>
@@ -1102,5 +1124,116 @@ describe('usage page', () => {
     live.push(META + frame('content', { delta: 'part' }))
     await screen.findByText('part')
     expect(screen.getByRole('button', { name: 'Usage' })).toBeDisabled()
+  })
+})
+
+describe('instructions and presets', () => {
+  const preset = (id: string, name: string, content: string) => ({
+    id,
+    name,
+    content,
+    created_at: stamp(),
+    updated_at: stamp(),
+  })
+  const PRESETS = [preset('p1', 'Concise', 'Answer briefly.'), preset('p2', 'Plain language', 'Use plain words.')]
+  const openPanel = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole('button', { name: /^Instructions/ }))
+    return screen.getByRole('dialog', { name: 'Instructions' })
+  }
+
+  it('a preset fills the box, and using it in a new chat saves the chat with it', async () => {
+    const server = mockServer(() => fullResponse(frame('content', { delta: 'ok' }), DONE), { presets: PRESETS })
+    const user = userEvent.setup()
+    render(<App />)
+    const panel = await openPanel(user)
+    expect(within(panel).getByText('None')).toBeInTheDocument()
+    await user.click(await within(panel).findByRole('button', { name: 'Concise' }))
+    expect(within(panel).getByRole('textbox', { name: 'Instructions for this chat' })).toHaveValue('Answer briefly.')
+    await user.click(within(panel).getByRole('button', { name: 'Use in this chat' }))
+    expect(screen.getByRole('button', { name: 'Instructions •' })).toBeInTheDocument()
+
+    await user.type(box(), 'hello{Enter}')
+    await screen.findByText('ok')
+    const created = server.calls.find((c) => c.method === 'POST' && c.url === '/api/conversations')
+    expect(created?.body).toMatchObject({ system_prompt: 'Answer briefly.' })
+    expect(server.calls.some((c) => c.method === 'PATCH')).toBe(false)
+  })
+
+  it('in a saved chat the instructions are saved with the chat', async () => {
+    const server = mockServer(() => fullResponse(DONE), {
+      conversations: [conversation('c1', 'Chat', { system_prompt: 'Answer briefly.' })],
+      presets: PRESETS,
+    })
+    window.location.hash = '#/c/c1'
+    const user = userEvent.setup()
+    render(<App />)
+    expect(await screen.findByRole('button', { name: 'Instructions •' })).toBeInTheDocument()
+    const panel = await openPanel(user)
+    expect(within(panel).getByText(/In use now:/)).toHaveTextContent('In use now: Concise') // recognised as a preset
+    await user.click(within(panel).getByRole('button', { name: 'Plain language' }))
+    await user.click(within(panel).getByRole('button', { name: 'Use in this chat' }))
+    await waitFor(() =>
+      expect(server.calls.find((c) => c.method === 'PATCH')?.body).toEqual({ system_prompt: 'Use plain words.' }),
+    )
+  })
+
+  it('your own text is saved as a new preset', async () => {
+    const server = mockServer(() => fullResponse(DONE), { presets: PRESETS })
+    const user = userEvent.setup()
+    render(<App />)
+    const panel = await openPanel(user)
+    await user.type(within(panel).getByRole('textbox', { name: 'Instructions for this chat' }), 'Reply in French.')
+    await user.type(within(panel).getByRole('textbox', { name: 'Preset name' }), 'French')
+    await user.click(within(panel).getByRole('button', { name: 'Save as preset' }))
+    expect(await within(panel).findByRole('button', { name: 'French' })).toBeInTheDocument()
+    expect(server.presets.at(-1)).toMatchObject({ name: 'French', content: 'Reply in French.' })
+  })
+
+  it('updates and deletes a preset (delete asks first)', async () => {
+    const server = mockServer(() => fullResponse(DONE), { presets: PRESETS })
+    const user = userEvent.setup()
+    render(<App />)
+    const panel = await openPanel(user)
+    await user.click(await within(panel).findByRole('button', { name: 'Concise' }))
+    const text = within(panel).getByRole('textbox', { name: 'Instructions for this chat' })
+    await user.clear(text)
+    await user.type(text, 'Answer in one line.')
+    await user.click(within(panel).getByRole('button', { name: /Update preset/ }))
+    await waitFor(() => expect(server.presets[0]!.content).toBe('Answer in one line.'))
+
+    await user.click(within(panel).getByRole('button', { name: 'Delete preset Concise' }))
+    await user.click(within(panel).getByRole('button', { name: 'Cancel' }))
+    expect(server.presets).toHaveLength(2)
+    await user.click(within(panel).getByRole('button', { name: 'Delete preset Concise' }))
+    await user.click(within(panel).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(server.presets.map((p) => p.name)).toEqual(['Plain language']))
+    expect(within(panel).queryByRole('button', { name: 'Concise' })).toBeNull()
+  })
+
+  it('cannot be changed while an answer is being written, and shows a failed save', async () => {
+    const live = liveStream()
+    mockServer(() => live.response, { presets: PRESETS })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.type(box(), 'working{Enter}')
+    live.push(META + frame('content', { delta: 'part' }))
+    await screen.findByText('part')
+    const panel = await openPanel(user)
+    await user.type(within(panel).getByRole('textbox', { name: 'Instructions for this chat' }), 'x')
+    expect(within(panel).getByRole('button', { name: 'Use in this chat' })).toBeDisabled()
+    expect(within(panel).getByText(/An answer is being written/)).toBeInTheDocument()
+  })
+
+  it('a new chat starts without the previous chat\'s instructions', async () => {
+    mockServer(() => fullResponse(DONE), {
+      conversations: [conversation('c1', 'Chat', { system_prompt: 'Answer briefly.' })],
+      presets: PRESETS,
+    })
+    window.location.hash = '#/c/c1'
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole('button', { name: 'Instructions •' })
+    await user.click(screen.getByRole('button', { name: 'New chat' }))
+    expect(await screen.findByRole('button', { name: 'Instructions' })).toBeInTheDocument()
   })
 })

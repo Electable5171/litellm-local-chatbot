@@ -13,6 +13,8 @@ export interface ChatOptions {
   thinking: boolean
   /** Documents chosen for a new chat; they are attached when the chat is saved. */
   attachedIds: string[]
+  /** The chat's instructions (system prompt); a new chat is saved with them. */
+  instructions: string
   /** A new chat was saved under this id (with its documents attached). */
   onCreated: (id: string) => void
   /** The page address should show this conversation (called when a new chat gets saved). */
@@ -99,8 +101,8 @@ export function useChat(options: ChatOptions) {
       try {
         let id = optionsRef.current.conversationId
         if (id === null) {
-          const { model, thinking } = optionsRef.current
-          id = (await createConversation({ model, thinking })).id
+          const { model, thinking, instructions } = optionsRef.current
+          id = (await createConversation({ model, thinking, system_prompt: instructions || undefined })).id
           createdRef.current = id
           setLoadedId(id)
           optionsRef.current.onCreated(id)

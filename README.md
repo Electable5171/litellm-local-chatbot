@@ -26,6 +26,8 @@ Then open **http://127.0.0.1:8000/**. You can watch the model think, stop an ans
 
 The app listens on `127.0.0.1` only, because it has no login.
 
+**Instructions.** The **Instructions** button (top right; it shows a dot when the chat has some) opens a panel where you tell the model how to behave in this chat, for example "Answer briefly". Five starter presets are included (Concise, Plain language, Step by step, Code helper, Critical reviewer); click one to load it, edit the text, and **Use in this chat**. You can save your own text as a preset, update a preset, or delete one. The text is copied into the chat, so changing or deleting a preset later does not change chats that used it, and a saved chat keeps its instructions after a reload. They apply from the next question on and cannot be changed while an answer is being written.
+
 **Usage.** The **Usage** link at the bottom of the chat list shows what this app has stored about your answers: how many, tokens written and read, response time (average, median, slowest 5%), time to first token, thinking time, speed, a chart of answers per day and your slowest answers (click one to open that chat). Choose Today, 7 days, 30 days or All time; days follow your computer's time zone. It counts only this laptop's chats; LiteLLM's own spend log remains the source for the team's total usage.
 
 **Edit a message.** Point at one of your messages and click **Edit**. Saving replaces that message and everything after it with a new answer to the new text. The later messages are deleted, not kept as another version, which is why the box tells you how many will go. Edit is not offered while an answer is being written, and a refused edit changes nothing.
