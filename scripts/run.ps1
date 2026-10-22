@@ -17,11 +17,13 @@
   .\scripts\run.cmd
   .\scripts\run.cmd -Installer pip     # force the pip / company-index route
   .\scripts\run.cmd -SkipSync          # start without checking dependencies (offline)
+  .\scripts\run.cmd -Background        # check dependencies, then (re)start in the background
 #>
 [CmdletBinding()]
 param(
     [ValidateSet("auto", "uv", "pip")][string]$Installer = "auto",
-    [switch]$SkipSync
+    [switch]$SkipSync,
+    [switch]$Background
 )
 
 $ErrorActionPreference = "Stop"
@@ -164,9 +166,16 @@ try {
     if (-not (Test-Path (Join-Path $repo "frontend\dist"))) {
         Write-Host "Note: the web UI is not built yet; only the API is available. Build it with  .\scripts\build-ui.cmd" -ForegroundColor Yellow
     }
-    Write-Host "Starting on http://127.0.0.1:8000  (Ctrl+C to stop)" -ForegroundColor Cyan
-    if ($python) { & $python -m app } else { & uv run --locked python -m app }
-    if ($LASTEXITCODE -ne 0) { throw "The app exited with code $LASTEXITCODE." }
+    if ($Background) {
+        Write-Host "Starting in the background (stop it with .\scripts\stop.cmd)" -ForegroundColor Cyan
+        if ($python) { & $python -m app.daemon start --restart } else { & uv run --locked python -m app.daemon start --restart }
+        if ($LASTEXITCODE -ne 0) { throw "The app did not start (exit code $LASTEXITCODE). See .\scripts\logs.cmd" }
+    }
+    else {
+        Write-Host "Starting on http://127.0.0.1:8000  (Ctrl+C to stop)" -ForegroundColor Cyan
+        if ($python) { & $python -m app } else { & uv run --locked python -m app }
+        if ($LASTEXITCODE -ne 0) { throw "The app exited with code $LASTEXITCODE." }
+    }
 }
 finally {
     Pop-Location
