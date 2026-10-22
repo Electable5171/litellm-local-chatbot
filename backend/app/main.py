@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import chat, conversations, documents, health, models
+from app.api import chat, conversations, documents, health, models, stats
 from app.config import Settings, get_settings
 from app.db.database import Database
 from app.errors import install_error_handlers
@@ -20,6 +20,7 @@ from app.services.embeddings import Embedder
 from app.services.health import HealthService
 from app.services.llm import LLMClient
 from app.services.retrieval import Retriever
+from app.services.stats import StatsService
 
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
@@ -37,6 +38,7 @@ def create_app(settings: Settings | None = None, llm: LLMClient | None = None) -
         db = Database(settings.data_dir / "chat.db")
         db.open()
         app.state.db = db
+        app.state.stats = StatsService(db)
         embedder = Embedder(app.state.llm, settings)
         retriever = Retriever(db, embedder, settings)
         app.state.conversations = ConversationService(db, app.state.chat, settings, retriever)
@@ -60,6 +62,7 @@ def create_app(settings: Settings | None = None, llm: LLMClient | None = None) -
     app.include_router(chat.router)
     app.include_router(conversations.router)
     app.include_router(documents.router)
+    app.include_router(stats.router)
 
     # Serve the built React app from the same process (one URL on the laptop). Must come last.
     if FRONTEND_DIST.is_dir():

@@ -26,6 +26,8 @@ Then open **http://127.0.0.1:8000/**. You can watch the model think, stop an ans
 
 The app listens on `127.0.0.1` only, because it has no login.
 
+**Usage.** The **Usage** link at the bottom of the chat list shows what this app has stored about your answers: how many, tokens written and read, response time (average, median, slowest 5%), time to first token, thinking time, speed, a chart of answers per day and your slowest answers (click one to open that chat). Choose Today, 7 days, 30 days or All time; days follow your computer's time zone. It counts only this laptop's chats; LiteLLM's own spend log remains the source for the team's total usage.
+
 **Edit a message.** Point at one of your messages and click **Edit**. Saving replaces that message and everything after it with a new answer to the new text. The later messages are deleted, not kept as another version, which is why the box tells you how many will go. Edit is not offered while an answer is being written, and a refused edit changes nothing.
 
 **Titles.** A new chat is first named after your question. After the first answer is complete, the model writes a short title (thinking off, one short request, never while another answer is being written); if that fails or the model is busy, the question stays as the title. A title you typed yourself is never replaced, and chats created before this feature keep their titles. Set `AUTO_TITLES=false` in `backend\.env` to turn this off.

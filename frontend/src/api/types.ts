@@ -101,3 +101,34 @@ export interface DocumentInfo {
   embedded_count: number
   created_at: string
 }
+
+export type StatsRange = 'today' | '7d' | '30d' | 'all'
+
+export interface StatsSummary {
+  count: number
+  avg: number | null
+  p50: number | null
+  p95: number | null
+  max: number | null
+}
+
+export interface StatsResponse {
+  range: StatsRange
+  since: string | null
+  answers: { complete: number; stopped: number; failed: number }
+  tokens: { prompt: number; completion: number }
+  latency_ms: StatsSummary
+  ttft_ms: StatsSummary
+  thinking_ms: StatsSummary
+  tokens_per_second: number | null
+  conversations: number
+  per_day: { date: string; answers: number; completion_tokens: number }[]
+  slowest: {
+    message_id: string
+    conversation_id: string
+    title: string
+    latency_ms: number
+    completion_tokens: number | null
+    created_at: string
+  }[]
+}

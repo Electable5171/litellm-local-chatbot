@@ -5,6 +5,7 @@ import { DocumentsPanel } from './components/DocumentsPanel'
 import { Header } from './components/Header'
 import { MessageList } from './components/MessageList'
 import { Sidebar } from './components/Sidebar'
+import { StatsPage } from './components/StatsPage'
 import { useAttached } from './hooks/useAttached'
 import { useChat } from './hooks/useChat'
 import { useConversations } from './hooks/useConversations'
@@ -35,7 +36,7 @@ export default function App() {
   const server = useHealth()
   const models = useModels()
   const conversations = useConversations()
-  const [routeId, open] = useRoute()
+  const { id: routeId, view, open, openStats } = useRoute()
   const [thinking, setThinking] = useState(loadThinking)
   const [chosenModel, setChosenModel] = useState<string>()
   const [drawer, setDrawer] = useState(false)
@@ -88,6 +89,11 @@ export default function App() {
         open={drawer}
         onClose={() => setDrawer(false)}
         onNew={() => go(null)}
+        onUsage={() => {
+          setDrawer(false)
+          openStats()
+        }}
+        usageActive={view === 'stats'}
         onSelect={go}
         onRename={(id, title) => void conversations.rename(id, title)}
         onDelete={(id) => {
@@ -95,53 +101,57 @@ export default function App() {
           if (id === routeId) go(null)
         }}
       />
-      <div className="app">
-        <Header
-          server={server}
-          models={models}
-          model={model}
-          onModel={(next) => {
-            setChosenModel(next)
-            remember({ model: next })
-          }}
-          thinking={thinking}
-          onThinking={(on) => {
-            setThinking(on)
-            saveThinking(on)
-            remember({ thinking: on })
-          }}
-          onMenu={() => setDrawer(true)}
-          exportHref={routeId ? `/api/conversations/${encodeURIComponent(routeId)}/export` : undefined}
-          busy={chat.busy}
-        />
-        {chat.loading ? (
-          <div className="messages">
-            <p className="notice">Loading…</p>
-          </div>
-        ) : (
-          <>
-            {chat.actionError && (
-              <p className="notice error" role="alert">
-                {chat.actionError}
-              </p>
-            )}
-            {chat.loadError && (
-              <p className="notice error" role="alert">
-                Could not open this chat: {chat.loadError}
-              </p>
-            )}
-            <MessageList messages={chat.messages} busy={chat.busy} onRetry={chat.retry} onEdit={chat.edit} />
-          </>
-        )}
-        <Composer
-          busy={chat.busy}
-          onSend={chat.send}
-          onStop={chat.stop}
-          documentCount={attached.ids.length}
-          onDocuments={() => setDocsOpen((open) => !open)}
-        />
-      </div>
-      {docsOpen && (
+      {view === 'stats' ? (
+        <StatsPage onBack={() => go(null)} onOpenChat={go} />
+      ) : (
+        <div className="app">
+          <Header
+            server={server}
+            models={models}
+            model={model}
+            onModel={(next) => {
+              setChosenModel(next)
+              remember({ model: next })
+            }}
+            thinking={thinking}
+            onThinking={(on) => {
+              setThinking(on)
+              saveThinking(on)
+              remember({ thinking: on })
+            }}
+            onMenu={() => setDrawer(true)}
+            exportHref={routeId ? `/api/conversations/${encodeURIComponent(routeId)}/export` : undefined}
+            busy={chat.busy}
+          />
+          {chat.loading ? (
+            <div className="messages">
+              <p className="notice">Loading…</p>
+            </div>
+          ) : (
+            <>
+              {chat.actionError && (
+                <p className="notice error" role="alert">
+                  {chat.actionError}
+                </p>
+              )}
+              {chat.loadError && (
+                <p className="notice error" role="alert">
+                  Could not open this chat: {chat.loadError}
+                </p>
+              )}
+              <MessageList messages={chat.messages} busy={chat.busy} onRetry={chat.retry} onEdit={chat.edit} />
+            </>
+          )}
+          <Composer
+            busy={chat.busy}
+            onSend={chat.send}
+            onStop={chat.stop}
+            documentCount={attached.ids.length}
+            onDocuments={() => setDocsOpen((open) => !open)}
+          />
+        </div>
+      )}
+      {docsOpen && view === 'chat' && (
         <DocumentsPanel
           docs={documents.items}
           attachedIds={attached.ids}
