@@ -929,3 +929,55 @@ a.ghost.button:hover {
   font-size: 0.85rem;
   color: var(--muted);
 }
+
+/* Instructions and presets */
+.panel-title {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.preset-list .selected {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.instructions-box {
+  width: 100%;
+  padding: 10px 12px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.preset-save {
+  display: flex;
+  gap: 6px;
+}
+
+.preset-save input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}

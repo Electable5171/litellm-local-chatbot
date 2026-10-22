@@ -132,3 +132,11 @@ export interface StatsResponse {
     created_at: string
   }[]
 }
+
+export interface Preset {
+  id: string
+  name: string
+  content: string
+  created_at: string
+  updated_at: string
+}

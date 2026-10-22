@@ -9,6 +9,9 @@ interface Props {
   thinking: boolean
   onThinking: (on: boolean) => void
   onMenu: () => void
+  /** True when this chat has instructions (a system prompt); the button then shows a dot. */
+  instructionsOn: boolean
+  onInstructions: () => void
   /** Download link of the open chat as a Markdown file; absent for a chat that is not saved yet. */
   exportHref?: string
   busy: boolean
@@ -28,7 +31,7 @@ function status(server: HealthState): { tone: 'ok' | 'warn' | 'bad' | 'wait'; te
   }
 }
 
-export function Header({ server, models, model, onModel, thinking, onThinking, onMenu, exportHref, busy }: Props) {
+export function Header({ server, models, model, onModel, thinking, onThinking, onMenu, instructionsOn, onInstructions, exportHref, busy }: Props) {
   const state = status(server)
   return (
     <header className="header">
@@ -61,6 +64,9 @@ export function Header({ server, models, model, onModel, thinking, onThinking, o
         />
         <span>Thinking</span>
       </label>
+      <button type="button" className="ghost" onClick={onInstructions}>
+        Instructions{instructionsOn ? ' •' : ''}
+      </button>
       {exportHref && (
         <a className="ghost button" href={exportHref} download>
           Export

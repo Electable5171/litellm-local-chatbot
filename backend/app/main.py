@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import chat, conversations, documents, health, models, stats
+from app.api import chat, conversations, documents, health, models, presets, stats
 from app.config import Settings, get_settings
 from app.db.database import Database
 from app.errors import install_error_handlers
@@ -19,6 +19,7 @@ from app.services.documents import DocumentService
 from app.services.embeddings import Embedder
 from app.services.health import HealthService
 from app.services.llm import LLMClient
+from app.services.presets import PresetService
 from app.services.retrieval import Retriever
 from app.services.stats import StatsService
 
@@ -39,6 +40,7 @@ def create_app(settings: Settings | None = None, llm: LLMClient | None = None) -
         db.open()
         app.state.db = db
         app.state.stats = StatsService(db)
+        app.state.presets = PresetService(db)
         embedder = Embedder(app.state.llm, settings)
         retriever = Retriever(db, embedder, settings)
         app.state.conversations = ConversationService(db, app.state.chat, settings, retriever)
@@ -63,6 +65,7 @@ def create_app(settings: Settings | None = None, llm: LLMClient | None = None) -
     app.include_router(conversations.router)
     app.include_router(documents.router)
     app.include_router(stats.router)
+    app.include_router(presets.router)
 
     # Serve the built React app from the same process (one URL on the laptop). Must come last.
     if FRONTEND_DIST.is_dir():

@@ -1,8 +1,10 @@
 import { useCallback, useState } from 'react'
 import { updateConversation } from './api/conversations'
+import { describeError } from './api/errors'
 import { Composer } from './components/Composer'
 import { DocumentsPanel } from './components/DocumentsPanel'
 import { Header } from './components/Header'
+import { InstructionsPanel } from './components/InstructionsPanel'
 import { MessageList } from './components/MessageList'
 import { Sidebar } from './components/Sidebar'
 import { StatsPage } from './components/StatsPage'
@@ -10,6 +12,7 @@ import { useAttached } from './hooks/useAttached'
 import { useChat } from './hooks/useChat'
 import { useConversations } from './hooks/useConversations'
 import { useDocuments } from './hooks/useDocuments'
+import { usePresets } from './hooks/usePresets'
 import { useRoute } from './hooks/useRoute'
 import { useHealth, useModels } from './hooks/useServer'
 
@@ -41,6 +44,10 @@ export default function App() {
   const [chosenModel, setChosenModel] = useState<string>()
   const [drawer, setDrawer] = useState(false)
   const [docsOpen, setDocsOpen] = useState(false)
+  const [instructionsOpen, setInstructionsOpen] = useState(false)
+  const [instructions, setInstructions] = useState('')
+  const [instructionsError, setInstructionsError] = useState<string | null>(null)
+  const presets = usePresets()
   const documents = useDocuments()
   const attached = useAttached(routeId)
   const model = chosenModel ?? models?.default
@@ -50,6 +57,7 @@ export default function App() {
       if (id === null) {
         setThinking(loadThinking())
         setChosenModel(undefined)
+        setInstructions('')
       }
       setDrawer(false)
       open(id)
@@ -62,14 +70,30 @@ export default function App() {
     model,
     thinking,
     attachedIds: attached.ids,
+    instructions,
     onCreated: attached.adopt,
     onOpen: go,
     onLoaded: (conversation) => {
       setThinking(conversation.thinking)
       setChosenModel(conversation.model)
+      setInstructions(conversation.system_prompt)
     },
     onChanged: conversations.refreshSoon,
   })
+
+  // Instructions apply to the chat from the next question on; a saved chat keeps them with it.
+  const applyInstructions = async (text: string) => {
+    setInstructionsError(null)
+    if (routeId !== null) {
+      try {
+        await updateConversation(routeId, { system_prompt: text })
+      } catch (error) {
+        setInstructionsError(describeError(error).message)
+        return
+      }
+    }
+    setInstructions(text)
+  }
 
   // Settings of a saved chat are saved with it, so they are still there when it is opened again.
   const remember = (change: { model?: string; thinking?: boolean }) => {
@@ -120,6 +144,8 @@ export default function App() {
               remember({ thinking: on })
             }}
             onMenu={() => setDrawer(true)}
+          instructionsOn={instructions.trim() !== ''}
+          onInstructions={() => setInstructionsOpen((open) => !open)}
             exportHref={routeId ? `/api/conversations/${encodeURIComponent(routeId)}/export` : undefined}
             busy={chat.busy}
           />
@@ -150,6 +176,20 @@ export default function App() {
             onDocuments={() => setDocsOpen((open) => !open)}
           />
         </div>
+      )}
+      {instructionsOpen && view === 'chat' && (
+        <InstructionsPanel
+          key={`${routeId ?? 'new'}:${instructions}`}
+          current={instructions}
+          presets={presets.items}
+          error={presets.error ?? instructionsError}
+          locked={chat.busy}
+          onClose={() => setInstructionsOpen(false)}
+          onUse={(text) => void applyInstructions(text)}
+          onCreate={presets.create}
+          onUpdate={(id, text) => void presets.update(id, text)}
+          onDelete={(id) => void presets.remove(id)}
+        />
       )}
       {docsOpen && view === 'chat' && (
         <DocumentsPanel

@@ -107,6 +107,8 @@ litellm-local-chatbot/
 | GET | `/api/models` | Proxy of LiteLLM `/v1/models` (filtered to allow-listed models) |
 | POST | `/api/chat` | **Built.** Stateless streaming core: the caller sends the messages, the response is an SSE stream. Used by the command-line chat; the web UI uses the conversation endpoints below, which wrap it and add saving. |
 | GET / POST | `/api/conversations` | List and create conversations. `GET ?q=text` searches titles and message text (plain `LIKE`, no index: fast enough for one user's history) and adds a `snippet` to each result |
+| GET / POST | `/api/presets` | **Built.** List and create named system prompts (five starters are added by migration `0005`) |
+| PATCH / DELETE | `/api/presets/{id}` | **Built.** Edit or delete a preset. A conversation's `system_prompt` is a copy, so this never changes existing chats |
 | GET | `/api/stats?range=today|7d|30d|all&tz=<minutes east of UTC>` | **Built.** Usage figures from the stored answers (counts, tokens, latency/first-token/thinking averages, median, 95th percentile, speed, answers per day, slowest answers) |
 | GET | `/api/conversations/{id}/export` | **Built.** Download as Markdown (`?thinking=true` adds the thinking) |
 | GET / PATCH / DELETE | `/api/conversations/{id}` | Read with messages, rename, delete |
