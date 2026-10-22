@@ -10,19 +10,23 @@ import type { ChatEvent, Health, ModelsResponse } from './types'
  */
 export async function* streamTurn(
   conversationId: string,
-  turn: { kind: 'message'; content: string } | { kind: 'regenerate' },
+  turn: { kind: 'message'; content: string } | { kind: 'edit'; messageId: string; content: string } | { kind: 'regenerate' },
   signal: AbortSignal,
 ): AsyncGenerator<ChatEvent> {
   const base = `/api/conversations/${encodeURIComponent(conversationId)}`
+  const send = (path: string, content: string) =>
+    fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content }),
+      signal,
+    })
   const response =
     turn.kind === 'message'
-      ? await fetch(`${base}/messages`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ content: turn.content }),
-          signal,
-        })
-      : await fetch(`${base}/regenerate`, { method: 'POST', signal })
+      ? await send('/messages', turn.content)
+      : turn.kind === 'edit'
+        ? await send(`/messages/${encodeURIComponent(turn.messageId)}/edit`, turn.content)
+        : await fetch(`${base}/regenerate`, { method: 'POST', signal })
   if (!response.ok || !response.body) throw await toApiError(response)
   for await (const message of parseSse(response.body)) {
     yield { type: message.event, ...JSON.parse(message.data) } as ChatEvent

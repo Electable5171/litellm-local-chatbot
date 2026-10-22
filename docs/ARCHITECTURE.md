@@ -111,6 +111,7 @@ litellm-local-chatbot/
 | GET / PATCH / DELETE | `/api/conversations/{id}` | Read with messages, rename, delete |
 | POST | `/api/conversations/{id}/messages` | Send a user message; **the response is an SSE stream** |
 | POST | `/api/conversations/{id}/regenerate` | Re-run the last assistant turn (SSE) |
+| POST | `/api/conversations/{id}/messages/{message_id}/edit` | **Built.** Replace one of the user's messages and every later message with new text, then answer it (SSE). Nothing is deleted if the model cannot be reached (the stream is opened before the database changes). Versions/branches are not kept. |
 | POST | `/api/messages/{id}/cancel` | Stop generation (also triggered when the client disconnects) |
 | POST / GET / DELETE | `/api/documents` | **Built.** Upload (the request body is the file, `X-Filename` header, `application/octet-stream` only), list with embedding progress, delete. The same file uploaded twice is stored once. |
 | GET | `/api/conversations/{id}/documents` | **Built.** Documents attached to a chat |

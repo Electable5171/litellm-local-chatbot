@@ -11,6 +11,7 @@ export type ChatEvent =
       thinking: boolean
       trimmed_messages: number
       conversation_id?: string
+      user_message_id?: string
     }
   | ({ type: 'sources' } & SourcesInfo)
   | { type: 'reasoning'; delta: string }

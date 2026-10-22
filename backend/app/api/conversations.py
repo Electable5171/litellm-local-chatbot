@@ -95,6 +95,13 @@ async def send_message(conversation_id: str, body: MessageIn, request: Request):
     return _stream(events)
 
 
+@router.post("/{conversation_id}/messages/{message_id}/edit")
+async def edit_message(conversation_id: str, message_id: str, body: MessageIn, request: Request):
+    """Replace one of your messages and everything after it, then answer the new text (SSE)."""
+    _, events = await _service(request).edit(conversation_id, message_id, body.content)
+    return _stream(events)
+
+
 @router.post("/{conversation_id}/regenerate")
 async def regenerate(conversation_id: str, request: Request):
     """Answer the last question again, replacing the last answer."""

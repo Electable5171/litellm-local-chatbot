@@ -33,6 +33,8 @@ export function useChat(options: ChatOptions) {
   const [state, dispatch] = useReducer(chatReducer, initialState)
   // Which conversation's messages are on screen, and which one failed to load (derived below).
   const [loadedId, setLoadedId] = useState<string | null>(null)
+  // A refused edit or similar: shown above the message box until the next action.
+  const [actionError, setActionError] = useState<string | null>(null)
   const [failed, setFailed] = useState<{ id: string; message: string } | null>(null)
   const stateRef = useRef(state)
   const optionsRef = useRef(options)
@@ -75,12 +77,15 @@ export function useChat(options: ChatOptions) {
 
   /** Stream one turn into the last answer. `turn` creates the conversation first when needed. */
   const run = useCallback(
-    async (turn: { kind: 'message'; content: string } | { kind: 'regenerate' }) => {
+    async (
+      turn: { kind: 'message'; content: string } | { kind: 'edit'; messageId: string; content: string } | { kind: 'regenerate' },
+    ) => {
       const controller = new AbortController()
       abortRef.current = controller
       let pending: ChatEvent[] = []
       let timer: ReturnType<typeof setTimeout> | undefined
       let finished = false
+      let started = false // any event of this answer has arrived
 
       const flush = () => {
         if (timer !== undefined) clearTimeout(timer)
@@ -103,6 +108,7 @@ export function useChat(options: ChatOptions) {
           for (const documentId of optionsRef.current.attachedIds) await attachDocument(id, documentId)
         }
         for await (const event of streamTurn(id, turn, controller.signal)) {
+          started = true
           pending.push(event)
           if (event.type === 'done' || event.type === 'error') {
             finished = true
@@ -122,7 +128,21 @@ export function useChat(options: ChatOptions) {
       } catch (error) {
         if (controller.signal.aborted) return
         flush()
-        dispatch({ type: 'fail', error: describeError(error), now: Date.now() })
+        if (turn.kind === 'edit' && !started) {
+          // The server refused the edit, so nothing changed there: show what it still has.
+          const id = optionsRef.current.conversationId
+          setActionError(describeError(error).message)
+          if (id !== null) {
+            try {
+              const conversation = await getConversation(id)
+              dispatch({ type: 'load', messages: conversation.messages.map(fromStored) })
+            } catch {
+              // keep what is on screen; the error above says what went wrong
+            }
+          }
+        } else {
+          dispatch({ type: 'fail', error: describeError(error), now: Date.now() })
+        }
       } finally {
         if (timer !== undefined) clearTimeout(timer)
         if (abortRef.current === controller) abortRef.current = null
@@ -136,8 +156,25 @@ export function useChat(options: ChatOptions) {
     (text: string): boolean => {
       const question = text.trim()
       if (!question || isBusy(stateRef.current)) return false
+      setActionError(null)
       dispatch({ type: 'send', userId: nextId(), assistantId: nextId(), text: question, now: Date.now() })
       void run({ kind: 'message', content: question })
+      return true
+    },
+    [run],
+  )
+
+  /** Replace one of your messages (and everything after it) with new text and answer that. */
+  const edit = useCallback(
+    (serverId: string, text: string): boolean => {
+      const question = text.trim()
+      const index = stateRef.current.messages.findIndex((m) => m.role === 'user' && m.serverId === serverId)
+      if (!question || index < 0 || isBusy(stateRef.current) || optionsRef.current.conversationId === null) {
+        return false
+      }
+      setActionError(null)
+      dispatch({ type: 'edit', index, userId: nextId(), assistantId: nextId(), text: question, now: Date.now() })
+      void run({ kind: 'edit', messageId: serverId, content: question })
       return true
     },
     [run],
@@ -172,5 +209,5 @@ export function useChat(options: ChatOptions) {
 
   const loadError = failed?.id === conversationId ? failed.message : null
   const loading = conversationId !== null && loadedId !== conversationId && loadError === null
-  return { messages: state.messages, busy: isBusy(state), loading, loadError, send, retry, stop }
+  return { messages: state.messages, busy: isBusy(state), loading, loadError, actionError, send, edit, retry, stop }
 }
