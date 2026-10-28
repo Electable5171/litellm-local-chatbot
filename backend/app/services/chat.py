@@ -72,6 +72,22 @@ class ChatService:
         self._settings = settings
         self._counter = counter or ApproxTokenCounter()
 
+    @property
+    def counter(self) -> TokenCounter:
+        return self._counter
+
+    def input_budget(self, max_tokens: int | None = None) -> int:
+        """Tokens a request may use: the working budget minus the room kept for the answer."""
+        settings = self._settings
+        reserved = max_tokens or settings.max_output_tokens
+        budget = min(settings.context_budget_tokens, settings.max_context_tokens)
+        budget -= reserved + SAFETY_MARGIN
+        if budget < 512:
+            raise ApiError(
+                "config_error", "MAX_OUTPUT_TOKENS leaves no room in the context budget.", 500
+            )
+        return budget
+
     def prepare(self, request: ChatRequest) -> Prepared:
         """Validate the request and trim the history to the context budget."""
         settings = self._settings
@@ -83,12 +99,7 @@ class ChatService:
         max_tokens = min(
             request.max_tokens or settings.max_output_tokens, settings.max_output_tokens
         )
-        budget = min(settings.context_budget_tokens, settings.max_context_tokens)
-        budget -= max_tokens + SAFETY_MARGIN
-        if budget < 512:
-            raise ApiError(
-                "config_error", "MAX_OUTPUT_TOKENS leaves no room in the context budget.", 500
-            )
+        budget = self.input_budget(max_tokens)
         messages, trimmed = fit_to_budget(request.messages, budget, self._counter)
         return Prepared(model, messages, request.thinking, max_tokens, trimmed)
 
