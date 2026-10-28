@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
-import type { ConversationWithMessages, DocumentInfo, Preset, StatsResponse, Health, ModelsResponse, StoredMessage } from './api/types'
+import type { ContextUsage, ConversationWithMessages, DocumentInfo, Preset, StatsResponse, Health, ModelsResponse, StoredMessage } from './api/types'
 
 const encoder = new TextEncoder()
 
@@ -152,6 +152,7 @@ function mockServer(
     documents?: DocumentInfo[]
     presets?: Preset[]
     stats?: (range: string) => Response | StatsResponse
+    context?: (conversationId: string) => ContextUsage
   } = {},
 ) {
   const db = new Map((options.conversations ?? []).map((c) => [c.id, c]))
@@ -251,6 +252,8 @@ function mockServer(
         documents: list.map((d) => docs.get(d)).filter(Boolean),
       })
     }
+    const contextMatch = /^\/api\/conversations\/([^/]+)\/context$/.exec(url)
+    if (contextMatch && options.context) return Response.json(options.context(decodeURIComponent(contextMatch[1]!)))
     const editMatch = /^\/api\/conversations\/([^/]+)\/messages\/([^/]+)\/edit$/.exec(url)
     if (editMatch) {
       return turn({
@@ -1235,5 +1238,111 @@ describe('instructions and presets', () => {
     await screen.findByRole('button', { name: 'Instructions •' })
     await user.click(screen.getByRole('button', { name: 'New chat' }))
     expect(await screen.findByRole('button', { name: 'Instructions' })).toBeInTheDocument()
+  })
+})
+
+describe('context meter', () => {
+  const usage = (extra: Partial<ContextUsage> = {}): ContextUsage => ({
+    used: 10_200,
+    budget: 24_320,
+    percent: 42,
+    parts: { instructions: 100, documents: 3_000, messages: 7_100 },
+    messages: 6,
+    would_trim: 0,
+    limit: 32_768,
+    reserved_for_answer: 8_448,
+    ...extra,
+  })
+  const withChat = () => ({ conversations: [conversation('c1', 'Chat', { messages: [stored('user', 'hi')] })] })
+
+  it('shows how full a saved chat is, with the breakdown on hover', async () => {
+    mockServer(() => fullResponse(DONE), { ...withChat(), context: () => usage() })
+    window.location.hash = '#/c/c1'
+    render(<App />)
+    expect(await screen.findByText('Context 42% · 10.2k of 24.3k tokens')).toBeInTheDocument()
+    const meter = screen.getByRole('meter', { name: 'Context used' })
+    expect(meter).toHaveAttribute('aria-valuenow', '42')
+    const box1 = meter.closest('.context-meter')!
+    expect(box1).toHaveClass('ok')
+    expect(box1.getAttribute('title')).toBe(
+      'Instructions 100 · Documents 3.0k · Messages 7.1k · Kept free for the answer 8.4k · Working limit 32.8k tokens',
+    )
+  })
+
+  it('warns when old messages would be left out, and says how many', async () => {
+    mockServer(() => fullResponse(DONE), {
+      ...withChat(),
+      context: () => usage({ used: 26_000, percent: 107, would_trim: 3 }),
+    })
+    window.location.hash = '#/c/c1'
+    render(<App />)
+    expect(await screen.findByText(/3 older messages will be left out of the next request/)).toBeInTheDocument()
+    expect(screen.getByText(/Context full · 26.0k of 24.3k tokens/)).toBeInTheDocument()
+    expect(screen.getByRole('meter', { name: 'Context used' })).toHaveAttribute('aria-valuenow', '100') // the bar stops at full
+    expect(screen.getByRole('meter').closest('.context-meter')).toHaveClass('full')
+  })
+
+  it('uses the singular for one message', async () => {
+    mockServer(() => fullResponse(DONE), { ...withChat(), context: () => usage({ percent: 80, used: 19_500, would_trim: 1 }) })
+    window.location.hash = '#/c/c1'
+    render(<App />)
+    await screen.findByText('Context 80% · 19.5k of 24.3k tokens')
+    expect(screen.getByText(/1 older message will be left out/)).toBeInTheDocument()
+  })
+
+  it('turns amber from 75 per cent', async () => {
+    mockServer(() => fullResponse(DONE), { ...withChat(), context: () => usage({ percent: 80, used: 19_500 }) })
+    window.location.hash = '#/c/c1'
+    render(<App />)
+    await screen.findByText('Context 80% · 19.5k of 24.3k tokens')
+    expect(screen.getByRole('meter').closest('.context-meter')).toHaveClass('warn')
+  })
+
+  it('is not shown for a new chat or an empty one', async () => {
+    mockServer(() => fullResponse(DONE), {
+      conversations: [conversation('c1', 'Empty')],
+      context: () => usage({ used: 0, percent: 0 }),
+    })
+    const { unmount } = render(<App />)
+    await screen.findByRole('textbox', { name: 'Message' })
+    expect(screen.queryByRole('meter')).toBeNull()
+    unmount()
+    window.location.hash = '#/c/c1'
+    render(<App />)
+    await screen.findByRole('textbox', { name: 'Message' })
+    await waitFor(() => expect(screen.queryByRole('meter')).toBeNull())
+  })
+
+  it('is read again when an answer has finished', async () => {
+    let percent = 10
+    mockServer(() => fullResponse(frame('content', { delta: 'ok' }), DONE), {
+      ...withChat(),
+      context: () => usage({ percent, used: percent * 100 }),
+    })
+    window.location.hash = '#/c/c1'
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('Context 10% · 1.0k of 24.3k tokens')
+    percent = 30
+    await user.type(box(), 'next{Enter}')
+    expect(await screen.findByText('Context 30% · 3.0k of 24.3k tokens')).toBeInTheDocument()
+  })
+
+  it('is read again when a document is attached', async () => {
+    let docs = 0
+    const server = mockServer(() => fullResponse(DONE), {
+      ...withChat(),
+      documents: [documentInfo('d1', 'report.pdf')],
+      context: () => usage({ parts: { instructions: 0, documents: docs, messages: 7_100 }, percent: docs ? 60 : 40 }),
+    })
+    window.location.hash = '#/c/c1'
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText(/Context 40%/)
+    docs = 4_000
+    await user.click(screen.getByRole('button', { name: /^Documents/ }))
+    await user.click(await screen.findByRole('checkbox', { name: 'Use report.pdf in this chat' }))
+    expect(await screen.findByText(/Context 60%/)).toBeInTheDocument()
+    expect(server.attached.get('c1')).toEqual(['d1'])
   })
 })

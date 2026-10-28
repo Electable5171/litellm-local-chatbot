@@ -28,7 +28,8 @@ from app.db.database import Database
 from app.errors import ApiError
 from app.services.chat import ChatRequest, ChatService, Event
 from app.services.documents import document_json
-from app.services.retrieval import Context, Retriever
+from app.services.retrieval import INSTRUCTIONS, Context, Retriever
+from app.services.tokens import PER_MESSAGE_OVERHEAD, SAFETY_MARGIN
 
 log = logging.getLogger("app.conversations")
 
@@ -282,6 +283,62 @@ class ConversationService:
     async def delete(self, conversation_id: str) -> None:
         if not await self._db.run(lambda c: repo.delete_conversation(c, conversation_id)):
             raise _not_found()
+
+    # -- context use ---------------------------------------------------------------------------
+
+    async def context_usage(self, conversation_id: str) -> dict[str, Any]:
+        """How full the next request would be, counted the way the app trims (see tokens.py)."""
+
+        def load(conn):
+            conv = repo.get_conversation(conn, conversation_id)
+            if conv is None:
+                return None
+            docs = doc_store.attached_documents(conn, conversation_id)
+            ready = [d["id"] for d in docs if d["status"] == "ready"]
+            chunks = doc_store.chunks_of(conn, ready)
+            return (
+                conv,
+                repo.list_messages(conn, conversation_id),
+                sum(c["token_count"] for c in chunks),
+            )
+
+        loaded = await self._db.run(load)
+        if loaded is None:
+            raise _not_found()
+        conv, messages, document_tokens = loaded
+        count = self._chat.counter.count
+
+        def size(text: str) -> int:
+            return count(text) + PER_MESSAGE_OVERHEAD
+
+        history = _history(messages)
+        instructions = size(conv["system_prompt"]) if conv["system_prompt"] else 0
+        documents = 0
+        if document_tokens:  # all of it when it fits, else at most the document budget
+            documents = min(document_tokens, self._settings.rag_context_tokens) + size(INSTRUCTIONS)
+        budget = self._chat.input_budget()
+        # The oldest messages go first, as in fit_to_budget, to make room for a short new message.
+        remaining = instructions + documents + size("x") + sum(size(m["content"]) for m in history)
+        dropped = 0
+        while remaining > budget and dropped < len(history):
+            remaining -= size(history[dropped]["content"])
+            dropped += 1
+        used = instructions + documents + sum(size(m["content"]) for m in history)
+        settings = self._settings
+        return {
+            "used": used,
+            "budget": budget,
+            "percent": round(100 * used / budget),
+            "parts": {
+                "instructions": instructions,
+                "documents": documents,
+                "messages": used - instructions - documents,
+            },
+            "messages": len(history),
+            "would_trim": dropped,
+            "limit": min(settings.context_budget_tokens, settings.max_context_tokens),
+            "reserved_for_answer": settings.max_output_tokens + SAFETY_MARGIN,
+        }
 
     # -- attached documents ------------------------------------------------------------------
 

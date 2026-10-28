@@ -111,6 +111,7 @@ litellm-local-chatbot/
 | GET / POST | `/api/presets` | **Built.** List and create named system prompts (five starters are added by migration `0005`) |
 | PATCH / DELETE | `/api/presets/{id}` | **Built.** Edit or delete a preset. A conversation's `system_prompt` is a copy, so this never changes existing chats |
 | GET | `/api/stats?range=today|7d|30d|all&tz=<minutes east of UTC>` | **Built.** Usage figures from the stored answers (counts, tokens, latency/first-token/thinking averages, median, 95th percentile, speed, answers per day, slowest answers) |
+| GET | `/api/conversations/{id}/context` | **Built.** How full the next request would be (`used`, `budget`, `percent`, split into instructions / documents / messages, and `would_trim`, the number of old messages the server would leave out), counted with the same estimator as the trimming |
 | GET | `/api/conversations/{id}/export` | **Built.** Download as Markdown (`?thinking=true` adds the thinking) |
 | GET / PATCH / DELETE | `/api/conversations/{id}` | Read with messages, rename, delete |
 | POST | `/api/conversations/{id}/messages` | Send a user message; **the response is an SSE stream** |

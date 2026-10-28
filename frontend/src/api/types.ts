@@ -140,3 +140,15 @@ export interface Preset {
   created_at: string
   updated_at: string
 }
+
+/** How full the next request to the model would be (counted the way the server trims). */
+export interface ContextUsage {
+  used: number
+  budget: number
+  percent: number
+  parts: { instructions: number; documents: number; messages: number }
+  messages: number
+  would_trim: number
+  limit: number
+  reserved_for_answer: number
+}

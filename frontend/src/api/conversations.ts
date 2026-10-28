@@ -1,5 +1,5 @@
 import { toApiError } from './errors'
-import type { Conversation, ConversationWithMessages } from './types'
+import type { Conversation, ConversationWithMessages, ContextUsage } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
@@ -35,3 +35,6 @@ export const updateConversation = (
 ) => request<Conversation>(url(id), json('PATCH', body))
 
 export const deleteConversation = (id: string) => request<void>(url(id), { method: 'DELETE' })
+
+export const getContextUsage = (id: string, signal?: AbortSignal) =>
+  request<ContextUsage>(`${url(id)}/context`, { signal })

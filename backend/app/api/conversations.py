@@ -59,6 +59,12 @@ async def get_conversation(conversation_id: str, request: Request) -> dict[str, 
     return await _service(request).get(conversation_id)
 
 
+@router.get("/{conversation_id}/context")
+async def context_usage(conversation_id: str, request: Request) -> dict[str, Any]:
+    """How full the next request to the model would be, and how many old messages would go."""
+    return await _service(request).context_usage(conversation_id)
+
+
 @router.get("/{conversation_id}/export")
 async def export_conversation(
     conversation_id: str, request: Request, thinking: bool = False

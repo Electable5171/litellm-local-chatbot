@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { updateConversation } from './api/conversations'
 import { describeError } from './api/errors'
 import { Composer } from './components/Composer'
+import { ContextMeter } from './components/ContextMeter'
 import { DocumentsPanel } from './components/DocumentsPanel'
 import { Header } from './components/Header'
 import { InstructionsPanel } from './components/InstructionsPanel'
@@ -10,6 +11,7 @@ import { Sidebar } from './components/Sidebar'
 import { StatsPage } from './components/StatsPage'
 import { useAttached } from './hooks/useAttached'
 import { useChat } from './hooks/useChat'
+import { useContextUsage } from './hooks/useContextUsage'
 import { useConversations } from './hooks/useConversations'
 import { useDocuments } from './hooks/useDocuments'
 import { usePresets } from './hooks/usePresets'
@@ -48,6 +50,7 @@ export default function App() {
   const [instructions, setInstructions] = useState('')
   const [instructionsError, setInstructionsError] = useState<string | null>(null)
   const presets = usePresets()
+  const [answers, setAnswers] = useState(0) // counts finished answers, to read the context use again
   const documents = useDocuments()
   const attached = useAttached(routeId)
   const model = chosenModel ?? models?.default
@@ -78,8 +81,13 @@ export default function App() {
       setChosenModel(conversation.model)
       setInstructions(conversation.system_prompt)
     },
-    onChanged: conversations.refreshSoon,
+    onChanged: () => {
+      conversations.refreshSoon()
+      setAnswers((n) => n + 1)
+    },
   })
+
+  const contextUsage = useContextUsage(routeId, `${answers}|${attached.ids.join(',')}|${instructions}`)
 
   // Instructions apply to the chat from the next question on; a saved chat keeps them with it.
   const applyInstructions = async (text: string) => {
@@ -168,6 +176,7 @@ export default function App() {
               <MessageList messages={chat.messages} busy={chat.busy} onRetry={chat.retry} onEdit={chat.edit} />
             </>
           )}
+          {contextUsage && !chat.loading && <ContextMeter usage={contextUsage} />}
           <Composer
             busy={chat.busy}
             onSend={chat.send}

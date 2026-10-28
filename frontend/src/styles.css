@@ -981,3 +981,42 @@ a.ghost.button:hover {
   border-radius: 8px;
   background: var(--bg);
 }
+
+/* Context meter */
+.context-meter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 2px 16px 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.context-bar {
+  width: 90px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+.context-bar > div {
+  height: 100%;
+  background: var(--ok);
+}
+
+.context-meter.warn .context-bar > div {
+  background: var(--warn);
+}
+
+.context-meter.full .context-bar > div {
+  background: var(--danger);
+}
+
+.context-warning {
+  color: var(--danger);
+}
