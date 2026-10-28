@@ -16,7 +16,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Coroutine
 from typing import Any
 
 import anyio
@@ -39,12 +39,24 @@ MAX_MESSAGE_CHARS = 200_000
 
 # A module-level alias: inside the class, the name ``list`` is the method ``list()`` below.
 DocumentList = list[dict[str, Any]]
+Rows = list[repo.Row]
 
 
 TITLE_PROMPT = (
     "You write short titles for chat conversations. Reply with the title only: at most 6 words, "
     "no quotes, no trailing punctuation, in the same language as the user's message."
 )
+
+
+SUMMARY_PROMPT = (
+    "You condense the earlier part of a conversation so that the assistant can carry on without "
+    "it. Write a compact summary in the same language as the conversation: the user's goals and "
+    "constraints, decisions made, facts and names that matter, code or commands that were agreed, "
+    "and open questions. Merge any earlier summary into it. Plain text or short bullet points; no "
+    "preamble; do not answer anything."
+)
+SUMMARY_NOTE = "Summary of the earlier part of this conversation (those messages are not shown):\n"
+SUMMARY_RETRY_S = 300.0
 
 
 def clean_title(raw: str) -> str | None:
@@ -131,16 +143,25 @@ def _sources_json(raw: str | None) -> dict[str, Any] | None:
         return None
 
 
-def _history(messages: list[repo.Row]) -> list[dict[str, str]]:
-    """What the model should see: finished answers, and stopped ones that have some text."""
+def _usable(messages: list[repo.Row], after: int = 0) -> list[repo.Row]:
+    """The messages the model should see: finished answers, and stopped ones that have some text.
+
+    Messages up to position ``after`` are left out (a summary stands in for them).
+    """
     out = []
     for m in messages:
+        if m["position"] <= after:
+            continue
         if m["role"] == "assistant" and (m["status"] not in ("complete", "cancelled")):
             continue
         if m["role"] == "assistant" and not m["content"]:
             continue
-        out.append({"role": m["role"], "content": m["content"]})
+        out.append(m)
     return out
+
+
+def _history(messages: list[repo.Row], after: int = 0) -> list[dict[str, str]]:
+    return [{"role": m["role"], "content": m["content"]} for m in _usable(messages, after)]
 
 
 class ConversationService:
@@ -157,7 +178,8 @@ class ConversationService:
         self._settings = settings
         self._active: set[str] = set()  # assistant messages being written by this process
         self._title_tasks: set[asyncio.Task[None]] = set()
-        self._title_gate = asyncio.Semaphore(1)
+        self._title_gate = asyncio.Semaphore(1)  # titles and summaries take turns
+        self._summary_retry_at: dict[str, float] = {}
 
     # -- plain CRUD --------------------------------------------------------------------------
 
@@ -311,19 +333,21 @@ class ConversationService:
         def size(text: str) -> int:
             return count(text) + PER_MESSAGE_OVERHEAD
 
-        history = _history(messages)
+        history = _history(messages, conv["summary_through"] if conv["summary"] else 0)
         instructions = size(conv["system_prompt"]) if conv["system_prompt"] else 0
+        summary = size(SUMMARY_NOTE + conv["summary"]) if conv["summary"] else 0
         documents = 0
         if document_tokens:  # all of it when it fits, else at most the document budget
             documents = min(document_tokens, self._settings.rag_context_tokens) + size(INSTRUCTIONS)
         budget = self._chat.input_budget()
         # The oldest messages go first, as in fit_to_budget, to make room for a short new message.
-        remaining = instructions + documents + size("x") + sum(size(m["content"]) for m in history)
+        fixed = instructions + summary + documents
+        remaining = fixed + size("x") + sum(size(m["content"]) for m in history)
         dropped = 0
         while remaining > budget and dropped < len(history):
             remaining -= size(history[dropped]["content"])
             dropped += 1
-        used = instructions + documents + sum(size(m["content"]) for m in history)
+        used = fixed + sum(size(m["content"]) for m in history)
         settings = self._settings
         return {
             "used": used,
@@ -332,9 +356,12 @@ class ConversationService:
             "parts": {
                 "instructions": instructions,
                 "documents": documents,
-                "messages": used - instructions - documents,
+                "summary": summary,
+                "messages": used - fixed,
             },
             "messages": len(history),
+            "summarized": len(_usable(messages)) - len(history),
+            "summary": conv["summary"] or None,
             "would_trim": dropped,
             "limit": min(settings.context_budget_tokens, settings.max_context_tokens),
             "reserved_for_answer": settings.max_output_tokens + SAFETY_MARGIN,
@@ -421,13 +448,16 @@ class ConversationService:
 
         cut: int | None = None  # with an edit: the position of the message that is replaced
         first_edited = False
+        through = conv["summary_through"] if conv["summary"] else 0
+        stale = False  # the summary covers a message that this turn removes
         if regenerate:
             if not messages or messages[-1]["role"] != "assistant":
                 raise ApiError("invalid_messages", "There is no answer to regenerate.", 409)
             drop = messages.pop()
             if not messages or messages[-1]["role"] != "user":
                 raise ApiError("invalid_messages", "There is no question to answer.", 409)
-            history = _history(messages)
+            stale = through >= drop["position"] or through >= messages[-1]["position"]
+            history = _history(messages, 0 if stale else through)
         elif edit_id is not None:
             index = next((i for i, m in enumerate(messages) if m["id"] == edit_id), None)
             if index is None:
@@ -436,11 +466,18 @@ class ConversationService:
                 raise ApiError("invalid_messages", "Only your own messages can be edited.", 400)
             cut = messages[index]["position"]
             first_edited = index == 0
-            history = _history(messages[:index]) + [{"role": "user", "content": content or ""}]
+            stale = through >= cut
+            history = _history(messages[:index], 0 if stale else through) + [
+                {"role": "user", "content": content or ""}
+            ]
             drop = None
         else:
-            history = _history(messages) + [{"role": "user", "content": content or ""}]
+            history = _history(messages, through) + [{"role": "user", "content": content or ""}]
             drop = None
+
+        if conv["summary"] and not stale:
+            note = {"role": "system", "content": SUMMARY_NOTE + conv["summary"]}
+            history = [note, *history]
 
         context: Context | None = None
         if self._retriever is not None:
@@ -465,6 +502,8 @@ class ConversationService:
 
         def save(conn):
             with repo.transaction(conn):
+                if stale:
+                    repo.clear_summary(conn, conversation_id)
                 if drop is not None:
                     repo.delete_message(conn, drop["id"])
                     user_row = messages[-1]
@@ -573,15 +612,18 @@ class ConversationService:
                     log.exception("could not save the answer %s", message_id)
                 finally:
                     self._active.discard(message_id)
-            if status == "complete" and self._settings.auto_titles:
-                self._schedule_title(conversation_id)
+            if status == "complete":
+                if self._settings.auto_titles:
+                    self._schedule(self._write_title(conversation_id))
+                if self._settings.auto_summary:
+                    self._schedule(self._write_summary(conversation_id))
 
-    # -- titles ------------------------------------------------------------------------------
-
-    def _schedule_title(self, conversation_id: str) -> None:
-        task = asyncio.create_task(self._write_title(conversation_id))
+    def _schedule(self, work: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.create_task(work)
         self._title_tasks.add(task)
         task.add_done_callback(self._title_tasks.discard)
+
+    # -- titles ------------------------------------------------------------------------------
 
     async def _write_title(self, conversation_id: str) -> None:
         """Ask the model for a short title. Never competes with a chat; failure keeps the draft."""
@@ -623,6 +665,110 @@ class ConversationService:
             raise
         except Exception as exc:
             log.info("no generated title for %s: %s", conversation_id, type(exc).__name__)
+
+    # -- summaries ---------------------------------------------------------------------------
+
+    async def _write_summary(self, conversation_id: str) -> None:
+        """Condense the oldest messages once the chat gets close to the budget.
+
+        Runs after an answer, one request at a time and never while an answer is being written.
+        The messages are kept; only what the next request contains changes. Failure (including
+        a busy model) leaves the chat as it was and is not retried for a few minutes.
+        """
+        settings = self._settings
+        try:
+            async with self._title_gate:
+                retry_at = self._summary_retry_at.get(conversation_id, 0)
+                if self._active or time.monotonic() < retry_at:
+                    return
+                try:
+                    usage = await self.context_usage(conversation_id)
+                except ApiError:
+                    return  # the chat was deleted meanwhile
+                if usage["percent"] < settings.summary_trigger_percent:
+                    return
+
+                def load(conn):
+                    return (
+                        repo.get_conversation(conn, conversation_id),
+                        repo.list_messages(conn, conversation_id),
+                    )
+
+                conv, messages = await self._db.run(load)
+                if conv is None:
+                    return
+                previous = conv["summary_through"] if conv["summary"] else 0
+                rows = _usable(messages, previous)
+                keep_from = self._first_kept(rows, usage["budget"])
+                if keep_from <= 0:
+                    return
+                covered = rows[:keep_from]
+                text = await self._summarize(conv, covered)
+                through = covered[-1]
+
+                def store(conn):
+                    with repo.transaction(conn):
+                        current = repo.get_message(conn, through["id"])
+                        if current is None or current["position"] != through["position"]:
+                            return False  # edited or removed while the summary was written
+                        return repo.set_summary(
+                            conn, conversation_id, text, through["position"], previous
+                        )
+
+                if await self._db.run(store):
+                    log.info("summarized %d message(s) of %s", len(covered), conversation_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._summary_retry_at[conversation_id] = time.monotonic() + SUMMARY_RETRY_S
+            log.info("no summary for %s: %s", conversation_id, type(exc).__name__)
+
+    def _first_kept(self, rows: Rows, budget: int) -> int:
+        """Index of the first message to leave as it is; 0 when there is nothing worth summarizing.
+
+        The newest messages up to a share of the budget are kept, and the kept part starts with a
+        question so that no answer is separated from it.
+        """
+        count = self._chat.counter.count
+        keep_tokens = budget * self._settings.summary_keep_percent // 100
+        kept, start = 0, len(rows)
+        while start > 0 and kept + count(rows[start - 1]["content"]) <= keep_tokens:
+            start -= 1
+            kept += count(rows[start]["content"]) + PER_MESSAGE_OVERHEAD
+        start = min(start, len(rows) - 2)  # always keep the latest exchange
+        while 0 < start < len(rows) and rows[start]["role"] != "user":
+            start += 1
+        if start >= len(rows):
+            return 0
+        return start
+
+    async def _summarize(self, conv: repo.Row, covered: Rows) -> str:
+        count = self._chat.counter.count
+        room = self._chat.input_budget() - self._settings.summary_tokens - 500
+        previous = f"Earlier summary:\n{conv['summary']}\n\n" if conv["summary"] else ""
+        text = ""
+        for width in (3000, 1000, 300):  # shorten long messages until the request fits
+            lines = [
+                f"{'User' if m['role'] == 'user' else 'Assistant'}: {_clip(m['content'], width)}"
+                for m in covered
+            ]
+            text = previous + "Conversation to condense:\n\n" + "\n\n".join(lines)
+            if count(text) <= room:
+                break
+        prompt = [
+            {"role": "system", "content": SUMMARY_PROMPT},
+            {"role": "user", "content": text + "\n\nSummary:"},
+        ]
+        summary = (
+            await self._chat.complete(conv["model"], prompt, self._settings.summary_tokens)
+        ).strip()
+        if not summary:
+            raise ValueError("empty summary")
+        return summary
+
+
+def _clip(text: str, width: int) -> str:
+    return text if len(text) <= width else text[:width] + "\u2026"
 
 
 async def _with_meta(

@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
+import { SUMMARY_RECHECK_MS } from './hooks/useContextUsage'
 import type { ContextUsage, ConversationWithMessages, DocumentInfo, Preset, StatsResponse, Health, ModelsResponse, StoredMessage } from './api/types'
 
 const encoder = new TextEncoder()
@@ -1246,8 +1247,10 @@ describe('context meter', () => {
     used: 10_200,
     budget: 24_320,
     percent: 42,
-    parts: { instructions: 100, documents: 3_000, messages: 7_100 },
+    parts: { instructions: 100, documents: 3_000, summary: 0, messages: 7_100 },
     messages: 6,
+    summarized: 0,
+    summary: null,
     would_trim: 0,
     limit: 32_768,
     reserved_for_answer: 8_448,
@@ -1298,6 +1301,47 @@ describe('context meter', () => {
     expect(screen.getByRole('meter').closest('.context-meter')).toHaveClass('warn')
   })
 
+  it('says when older messages are sent as a summary and shows its text', async () => {
+    mockServer(() => fullResponse(DONE), {
+      ...withChat(),
+      context: () =>
+        usage({
+          summarized: 4,
+          summary: 'They planned the migration.',
+          parts: { instructions: 0, documents: 0, summary: 300, messages: 5_000 },
+        }),
+    })
+    window.location.hash = '#/c/c1'
+    render(<App />)
+    expect(await screen.findByText('4 earlier messages are sent to the model as a summary')).toBeInTheDocument()
+    expect(screen.getByText('They planned the migration.')).toBeInTheDocument()
+    expect(screen.getByRole('meter').closest('.context-meter')).toHaveAttribute('title', expect.stringContaining('Summary 300'))
+  })
+
+  it('looks once more for a summary when the chat is nearly full and has none yet', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let reads = 0
+      mockServer(() => fullResponse(DONE), {
+        ...withChat(),
+        context: () => {
+          reads += 1
+          return reads === 1 ? usage({ percent: 80 }) : usage({ percent: 40, summarized: 2, summary: 'Short version.' })
+        },
+      })
+      window.location.hash = '#/c/c1'
+      render(<App />)
+      await screen.findByText('Context 80% · 10.2k of 24.3k tokens')
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SUMMARY_RECHECK_MS + 100)
+      })
+      expect(await screen.findByText('Short version.')).toBeInTheDocument()
+      expect(reads).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('is not shown for a new chat or an empty one', async () => {
     mockServer(() => fullResponse(DONE), {
       conversations: [conversation('c1', 'Empty')],
@@ -1333,7 +1377,7 @@ describe('context meter', () => {
     const server = mockServer(() => fullResponse(DONE), {
       ...withChat(),
       documents: [documentInfo('d1', 'report.pdf')],
-      context: () => usage({ parts: { instructions: 0, documents: docs, messages: 7_100 }, percent: docs ? 60 : 40 }),
+      context: () => usage({ parts: { instructions: 0, documents: docs, summary: 0, messages: 7_100 }, percent: docs ? 60 : 40 }),
     })
     window.location.hash = '#/c/c1'
     const user = userEvent.setup()

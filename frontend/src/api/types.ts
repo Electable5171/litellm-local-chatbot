@@ -146,8 +146,12 @@ export interface ContextUsage {
   used: number
   budget: number
   percent: number
-  parts: { instructions: number; documents: number; messages: number }
+  parts: { instructions: number; documents: number; summary: number; messages: number }
   messages: number
+  /** Older messages that a summary stands in for. */
+  summarized: number
+  /** The model-written summary of those messages, if there is one. */
+  summary: string | null
   would_trim: number
   limit: number
   reserved_for_answer: number

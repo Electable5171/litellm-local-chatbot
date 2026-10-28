@@ -144,6 +144,25 @@ def set_generated_title(conn: sqlite3.Connection, conversation_id: str, title: s
     return cursor.rowcount > 0
 
 
+def set_summary(
+    conn: sqlite3.Connection, conversation_id: str, text: str, through: int, previous: int
+) -> bool:
+    """Store a summary of the messages up to ``through``; false if another was stored meanwhile."""
+    cursor = conn.execute(
+        "UPDATE conversations SET summary = ?, summary_through = ?"
+        " WHERE id = ? AND summary_through = ?",
+        (text, through, conversation_id, previous),
+    )
+    return cursor.rowcount > 0
+
+
+def clear_summary(conn: sqlite3.Connection, conversation_id: str) -> None:
+    conn.execute(
+        "UPDATE conversations SET summary = '', summary_through = 0 WHERE id = ?",
+        (conversation_id,),
+    )
+
+
 def delete_conversation(conn: sqlite3.Connection, conversation_id: str) -> bool:
     cursor = conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
     return cursor.rowcount > 0

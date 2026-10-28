@@ -1020,3 +1020,12 @@ a.ghost.button:hover {
 .context-warning {
   color: var(--danger);
 }
+
+.context-summary {
+  flex-basis: 100%;
+}
+
+.context-summary p {
+  margin: 0.4em 0 0;
+  white-space: pre-wrap;
+}

@@ -53,6 +53,7 @@ def test_messages_and_instructions_are_counted_like_the_trimming_counts_them(set
     assert data["parts"] == {
         "instructions": COUNT("Be brief.") + 4,
         "documents": 0,
+        "summary": 0,
         "messages": expected_messages,
     }
     assert data["used"] == data["parts"]["instructions"] + expected_messages
