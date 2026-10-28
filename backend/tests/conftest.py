@@ -28,5 +28,6 @@ def settings(tmp_path):
         max_retries=0,
         health_cache_s=60,
         auto_titles=False,  # tests that look at titles switch it on
+        auto_summary=False,  # tests that look at summaries switch it on
         allowed_models="qwen3.8,nemotron-nano,gpt-oss",
     )

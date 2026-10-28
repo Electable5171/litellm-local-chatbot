@@ -10,6 +10,7 @@ export function ContextMeter({ usage }: { usage: ContextUsage }) {
   const details = [
     `Instructions ${tokens(usage.parts.instructions)}`,
     `Documents ${tokens(usage.parts.documents)}`,
+    ...(usage.parts.summary > 0 ? [`Summary ${tokens(usage.parts.summary)}`] : []),
     `Messages ${tokens(usage.parts.messages)}`,
     `Kept free for the answer ${tokens(usage.reserved_for_answer)}`,
     `Working limit ${tokens(usage.limit)} tokens`,
@@ -30,6 +31,15 @@ export function ContextMeter({ usage }: { usage: ContextUsage }) {
         {usage.percent > 100 ? 'Context full' : `Context ${usage.percent}%`} · {tokens(usage.used)} of{' '}
         {tokens(usage.budget)} tokens
       </span>
+      {usage.summary && (
+        <details className="context-summary">
+          <summary>
+            {usage.summarized === 1 ? '1 earlier message is' : `${usage.summarized} earlier messages are`} sent to the
+            model as a summary
+          </summary>
+          <p>{usage.summary}</p>
+        </details>
+      )}
       {usage.would_trim > 0 && (
         <span className="context-warning" role="status">
           {usage.would_trim === 1 ? '1 older message' : `${usage.would_trim} older messages`} will be left out of the next

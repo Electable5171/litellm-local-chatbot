@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # Let the model write a short title for a chat after its first answer
     auto_titles: bool = True
 
+    # Replace the oldest part of a long chat with a model-written summary (the messages are kept)
+    auto_summary: bool = True
+    summary_trigger_percent: int = Field(default=75, ge=30, le=100)  # of the input budget
+    summary_keep_percent: int = Field(default=30, ge=10, le=60)  # newest messages left as they are
+    summary_tokens: int = Field(default=1_000, ge=200, le=4_000)
+
     # Documents (RAG)
     max_upload_mb: int = Field(default=25, ge=1, le=200)
     max_pdf_pages: int = Field(default=500, ge=1)
