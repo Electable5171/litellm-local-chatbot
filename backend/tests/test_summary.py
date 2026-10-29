@@ -182,3 +182,18 @@ def test_a_second_summary_builds_on_the_first(settings):
     assert len(summarized) >= 2
     assert "Earlier summary:" in summarized[1]["messages"][1]["content"]
     assert data["percent"] <= 100 and data["would_trim"] == 0
+
+
+@respx.mock
+def test_instructions_and_summary_go_out_as_one_system_message(settings):
+    # Qwen's chat template answers 400 "System message must be at the beginning" otherwise.
+    streamed, _ = router()
+    with TestClient(create_app(small(settings))) as client:
+        conv = client.post("/api/conversations", json={"system_prompt": "Be brief."}).json()
+        for i in range(4):
+            say(client, conv["id"], f"question number {i}")
+    sent = streamed[-1]["messages"]
+    systems = [m for m in sent if m["role"] == "system"]
+    assert len(systems) == 1 and sent[0] is not None and sent[0]["role"] == "system"
+    assert systems[0]["content"].startswith("Be brief.")
+    assert SUMMARY_NOTE in systems[0]["content"]
