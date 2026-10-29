@@ -64,6 +64,20 @@ def _map_error(exc: Exception, *, midstream: bool = False) -> ApiError:
     return LLMError("upstream_error", "The model stream failed.", 502)
 
 
+def one_system_message(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    """All system text in a single first message.
+
+    Qwen's chat template rejects a request with more than one system message, or one that is not
+    first ("System message must be at the beginning"). Instructions, document excerpts and a chat
+    summary are separate system messages inside the app, so they are joined here.
+    """
+    system = [m["content"] for m in messages if m["role"] == "system"]
+    if not system:
+        return list(messages)
+    rest = [m for m in messages if m["role"] != "system"]
+    return [{"role": "system", "content": "\n\n".join(system)}, *rest]
+
+
 class ChatService:
     def __init__(
         self, llm: LLMClient, settings: Settings, counter: TokenCounter | None = None
@@ -100,7 +114,9 @@ class ChatService:
             request.max_tokens or settings.max_output_tokens, settings.max_output_tokens
         )
         budget = self.input_budget(max_tokens)
-        messages, trimmed = fit_to_budget(request.messages, budget, self._counter)
+        messages, trimmed = fit_to_budget(
+            one_system_message(request.messages), budget, self._counter
+        )
         return Prepared(model, messages, request.thinking, max_tokens, trimmed)
 
     async def complete(self, model: str, messages: list[dict[str, str]], max_tokens: int) -> str:
